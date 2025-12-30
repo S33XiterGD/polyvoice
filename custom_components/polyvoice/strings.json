@@ -114,8 +114,6 @@
       "advanced": {
         "title": "Advanced Settings",
         "data": {
-          "conversation_memory": "Enable Conversation Memory",
-          "memory_max_messages": "Max Messages to Remember (2-50)",
           "llm_hass_api": "LLM Home Assistant API",
           "system_prompt": "System Prompt"
         }
