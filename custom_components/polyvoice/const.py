@@ -264,6 +264,7 @@ GENERAL GUIDELINES:
 - For restaurant recommendations, use get_restaurant_recommendations
 - For news, use get_news
 - For calendar events, use get_calendar_events
+- For music control (play, skip, next track, previous, pause, resume, transfer), use control_music
 - For native HA control (lights, locks), let native HA Assist handle those
 """
 
