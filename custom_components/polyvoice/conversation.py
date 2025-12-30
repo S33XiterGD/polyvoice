@@ -808,11 +808,11 @@ class LMStudioConversationEntity(ConversationEntity):
                 "type": "function",
                 "function": {
                     "name": "control_music",
-                    "description": "Play music or transfer playback via Music Assistant. Use for: 'play [artist/song/genre]', 'shuffle [playlist]', 'transfer music to [room]'. For pause/resume/skip, let Home Assistant handle those natively.",
+                    "description": "Control music playback via Music Assistant. Use for: 'play [artist/song/genre]', 'shuffle [playlist]', 'transfer music to [room]', 'skip', 'next track', 'previous', 'pause', 'resume'.",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "action": {"type": "string", "enum": ["play", "transfer"], "description": "'play' to start music, 'transfer' to move playback to another room"},
+                            "action": {"type": "string", "enum": ["play", "transfer", "skip", "previous", "pause", "resume"], "description": "'play' to start music, 'transfer' to move to another room, 'skip'/'previous' for track control, 'pause'/'resume' for playback"},
                             "query": {"type": "string", "description": "What to play: artist, song, album, playlist, or genre (e.g., 'jazz', 'Beatles', 'workout playlist')"},
                             "room": {"type": "string", "description": "Target room for playback or transfer (e.g., 'kitchen', 'bedroom', 'office')"},
                             "shuffle": {"type": "boolean", "description": "Shuffle the playlist (default: false)"}
@@ -3130,8 +3130,92 @@ class LMStudioConversationEntity(ConversationEntity):
                     room_name = get_room_name(target_player)
                     return {"status": "transferred", "message": f"Music transferred to the {room_name}"}
 
+                # ===== SKIP ACTION =====
+                elif action == "skip":
+                    # Find currently playing player
+                    playing_player = None
+                    for player in all_players:
+                        state = self.hass.states.get(player)
+                        if state and state.state == "playing":
+                            playing_player = player
+                            break
+
+                    if not playing_player:
+                        playing_player = default_player
+
+                    _LOGGER.info("Skipping to next track on %s", playing_player)
+                    await self.hass.services.async_call(
+                        "media_player", "media_next_track",
+                        {"entity_id": playing_player},
+                        blocking=True
+                    )
+                    return {"status": "skipped", "message": "Skipped to next track"}
+
+                # ===== PREVIOUS ACTION =====
+                elif action == "previous":
+                    # Find currently playing player
+                    playing_player = None
+                    for player in all_players:
+                        state = self.hass.states.get(player)
+                        if state and state.state == "playing":
+                            playing_player = player
+                            break
+
+                    if not playing_player:
+                        playing_player = default_player
+
+                    _LOGGER.info("Going to previous track on %s", playing_player)
+                    await self.hass.services.async_call(
+                        "media_player", "media_previous_track",
+                        {"entity_id": playing_player},
+                        blocking=True
+                    )
+                    return {"status": "previous", "message": "Playing previous track"}
+
+                # ===== PAUSE ACTION =====
+                elif action == "pause":
+                    # Find currently playing player
+                    playing_player = None
+                    for player in all_players:
+                        state = self.hass.states.get(player)
+                        if state and state.state == "playing":
+                            playing_player = player
+                            break
+
+                    if not playing_player:
+                        return {"error": "No music is currently playing"}
+
+                    _LOGGER.info("Pausing music on %s", playing_player)
+                    await self.hass.services.async_call(
+                        "media_player", "media_pause",
+                        {"entity_id": playing_player},
+                        blocking=True
+                    )
+                    return {"status": "paused", "message": "Music paused"}
+
+                # ===== RESUME ACTION =====
+                elif action == "resume":
+                    # Find paused player
+                    paused_player = None
+                    for player in all_players:
+                        state = self.hass.states.get(player)
+                        if state and state.state == "paused":
+                            paused_player = player
+                            break
+
+                    if not paused_player:
+                        paused_player = default_player
+
+                    _LOGGER.info("Resuming music on %s", paused_player)
+                    await self.hass.services.async_call(
+                        "media_player", "media_play",
+                        {"entity_id": paused_player},
+                        blocking=True
+                    )
+                    return {"status": "resumed", "message": "Music resumed"}
+
                 else:
-                    return {"error": f"Unknown action: {action}. Use 'play' or 'transfer'."}
+                    return {"error": f"Unknown action: {action}. Use 'play', 'transfer', 'skip', 'previous', 'pause', or 'resume'."}
 
             except Exception as err:
                 _LOGGER.error("Error in control_music: %s", err, exc_info=True)
