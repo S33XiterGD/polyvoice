@@ -2988,21 +2988,41 @@ class LMStudioConversationEntity(ConversationEntity):
                     return {"status": "stopped", "message": f"Music stopped {room_text}"}
 
                 elif action == "skip_next":
-                    for player in target_players:
-                        await self.hass.services.async_call(
-                            "media_player", "media_next_track",
-                            {"entity_id": player},
-                            blocking=True
-                        )
+                    # Find THE currently playing player (only one!)
+                    playing_player = None
+                    for player in all_players:
+                        state = self.hass.states.get(player)
+                        if state and state.state == "playing":
+                            playing_player = player
+                            break
+
+                    if not playing_player:
+                        return {"error": "No music is currently playing"}
+
+                    await self.hass.services.async_call(
+                        "media_player", "media_next_track",
+                        {"entity_id": playing_player},
+                        blocking=True
+                    )
                     return {"status": "skipped", "message": "Skipped to next track"}
 
                 elif action == "skip_previous":
-                    for player in target_players:
-                        await self.hass.services.async_call(
-                            "media_player", "media_previous_track",
-                            {"entity_id": player},
-                            blocking=True
-                        )
+                    # Find THE currently playing player (only one!)
+                    playing_player = None
+                    for player in all_players:
+                        state = self.hass.states.get(player)
+                        if state and state.state == "playing":
+                            playing_player = player
+                            break
+
+                    if not playing_player:
+                        return {"error": "No music is currently playing"}
+
+                    await self.hass.services.async_call(
+                        "media_player", "media_previous_track",
+                        {"entity_id": playing_player},
+                        blocking=True
+                    )
                     return {"status": "skipped", "message": "Skipped to previous track"}
 
                 elif action == "what_playing":
