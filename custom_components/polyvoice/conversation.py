@@ -2876,31 +2876,30 @@ class LMStudioConversationEntity(ConversationEntity):
             if not all_players and not self.default_music_player:
                 return {"error": "No music players found. Add them in Settings → PolyVoice → Entity Configuration."}
 
-            # Helper to find player by room name - PREFER Music Assistant entities (mass_*)
+            # Helper to find player by room name - ONLY Music Assistant entities (mass_*)
             def find_player_by_room(room_name: str) -> str | None:
                 room_normalized = room_name.replace(" ", "_").lower()
-                all_matches = []
 
-                # Find ALL matching players
-                for player in get_all_media_players():
-                    player_lower = player.lower()
-                    if room_normalized in player_lower or room_name.replace(" ", "") in player_lower:
-                        all_matches.append(player)
+                # ONLY look at Music Assistant entities (mass_*) - ignore TVs, voice assistants, etc.
+                mass_players = [p for p in get_all_media_players() if "mass_" in p.lower()]
 
-                if not all_matches:
-                    _LOGGER.warning("No player found for room '%s'", room_name)
+                if not mass_players:
+                    _LOGGER.warning("No Music Assistant (mass_*) players found in HA!")
                     return None
 
-                _LOGGER.info("Found %d players matching room '%s': %s", len(all_matches), room_name, all_matches)
+                _LOGGER.info("Available Music Assistant players: %s", mass_players)
 
-                # PREFER Music Assistant entities (mass_*)
-                for player in all_matches:
-                    if "mass_" in player.lower():
-                        _LOGGER.info("Using Music Assistant player for room: %s", player)
+                # Find matching player by room name
+                for player in mass_players:
+                    player_lower = player.lower()
+                    # Remove "mass_" prefix and "media_player." for matching
+                    player_name = player_lower.replace("media_player.", "").replace("mass_", "")
+                    if room_normalized in player_name or room_name.replace(" ", "") in player_name:
+                        _LOGGER.info("Matched room '%s' to player: %s", room_name, player)
                         return player
 
-                # Fall back to first match
-                return all_matches[0]
+                _LOGGER.warning("No Music Assistant player found for room '%s'. Available: %s", room_name, mass_players)
+                return None
 
             # Helper to extract room name from entity_id
             def get_room_from_player(player: str) -> str:
