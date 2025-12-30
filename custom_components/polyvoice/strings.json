@@ -10,11 +10,11 @@
       },
       "credentials": {
         "title": "Configure {provider}",
-        "description": "Enter your API credentials",
+        "description": "Enter your API credentials. For Azure OpenAI, use format: https://{resource-name}.openai.azure.com. For Ollama, use http://localhost:11434/v1",
         "data": {
-          "base_url": "API Base URL (for local servers)",
+          "base_url": "API Base URL",
           "api_key": "API Key",
-          "model": "Model Name"
+          "model": "Model Name (or Azure deployment name)"
         }
       }
     },

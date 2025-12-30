@@ -33,6 +33,8 @@ from .const import (
     PROVIDER_GOOGLE,
     PROVIDER_GROQ,
     PROVIDER_OPENROUTER,
+    PROVIDER_AZURE,
+    PROVIDER_OLLAMA,
     DEFAULT_PROVIDER,
     DEFAULT_BASE_URL,
     DEFAULT_API_KEY,
@@ -179,16 +181,28 @@ class LMStudioAssistantConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # Get defaults for this provider
         default_url = PROVIDER_BASE_URLS.get(provider, DEFAULT_BASE_URL)
         default_model = PROVIDER_DEFAULT_MODELS.get(provider, DEFAULT_MODEL)
-        
+
         # Show different fields based on provider
-        show_base_url = provider == PROVIDER_LM_STUDIO  # Only show URL for local
-        
+        # Show URL for local providers (LM Studio, Ollama) and Azure (requires custom endpoint)
+        show_base_url = provider in [PROVIDER_LM_STUDIO, PROVIDER_OLLAMA, PROVIDER_AZURE]
+
         schema_dict = {}
-        
+
         if show_base_url:
-            schema_dict[vol.Required(CONF_BASE_URL, default=default_url)] = str
-        
-        schema_dict[vol.Required(CONF_API_KEY, default="" if provider != PROVIDER_LM_STUDIO else "lm-studio")] = str
+            # Azure needs a placeholder hint since URL is required
+            if provider == PROVIDER_AZURE:
+                schema_dict[vol.Required(CONF_BASE_URL, default="")] = str
+            else:
+                schema_dict[vol.Required(CONF_BASE_URL, default=default_url)] = str
+
+        # API key: optional for Ollama, required for others
+        if provider == PROVIDER_OLLAMA:
+            schema_dict[vol.Optional(CONF_API_KEY, default="")] = str
+        elif provider == PROVIDER_LM_STUDIO:
+            schema_dict[vol.Required(CONF_API_KEY, default="lm-studio")] = str
+        else:
+            schema_dict[vol.Required(CONF_API_KEY, default="")] = str
+
         schema_dict[vol.Required(CONF_MODEL, default=default_model)] = str
 
         return self.async_show_form(
@@ -223,6 +237,36 @@ class LMStudioAssistantConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         timeout=aiohttp.ClientTimeout(total=10),
                     ) as response:
                         return response.status in (200, 400, 403)
+                elif provider == PROVIDER_AZURE:
+                    # Azure OpenAI uses api-key header
+                    if not base_url:
+                        return False  # Azure requires a base URL
+                    headers = {"api-key": api_key} if api_key else {}
+                    # Azure endpoint format: https://{resource}.openai.azure.com/openai/deployments/{deployment}
+                    # Test with models endpoint at the resource level
+                    # Extract resource URL from deployment URL
+                    try:
+                        # Try to extract base resource URL for testing
+                        if "/openai/deployments/" in base_url:
+                            resource_url = base_url.split("/openai/deployments/")[0]
+                            test_url = f"{resource_url}/openai/models?api-version=2024-02-01"
+                        else:
+                            test_url = f"{base_url}/openai/models?api-version=2024-02-01"
+                        async with session.get(
+                            test_url,
+                            headers=headers,
+                            timeout=aiohttp.ClientTimeout(total=10),
+                        ) as response:
+                            return response.status in (200, 401, 403)
+                    except Exception:
+                        return True  # Allow setup if URL parsing fails
+                elif provider == PROVIDER_OLLAMA:
+                    # Ollama - no auth required, just check if server is responding
+                    async with session.get(
+                        f"{base_url}/models",
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as response:
+                        return response.status in (200, 401)
                 else:
                     # OpenAI-compatible (LM Studio, OpenAI, Groq, OpenRouter)
                     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
@@ -234,8 +278,8 @@ class LMStudioAssistantConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         return response.status in (200, 401)
         except Exception as e:
             _LOGGER.warning("Connection test exception: %s", e)
-            # For local LM Studio, connection refused is expected if server isn't running
-            if provider == PROVIDER_LM_STUDIO:
+            # For local providers, connection refused is expected if server isn't running
+            if provider in [PROVIDER_LM_STUDIO, PROVIDER_OLLAMA]:
                 return True  # Allow setup even if server isn't running
             return False
 
