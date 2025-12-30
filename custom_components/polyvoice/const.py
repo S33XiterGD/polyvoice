@@ -196,15 +196,6 @@ DEFAULT_NOTIFICATION_SERVICE: Final = ""
 DEFAULT_CAMERA_ENTITIES: Final = ""
 
 # =============================================================================
-# CONVERSATION SETTINGS
-# =============================================================================
-CONF_CONVERSATION_MEMORY: Final = "conversation_memory"
-CONF_MEMORY_MAX_MESSAGES: Final = "memory_max_messages"
-
-DEFAULT_CONVERSATION_MEMORY: Final = False  # Stateless by default
-DEFAULT_MEMORY_MAX_MESSAGES: Final = 10
-
-# =============================================================================
 # NATIVE INTENTS
 # =============================================================================
 CONF_USE_NATIVE_INTENTS: Final = "use_native_intents"

@@ -76,9 +76,6 @@ from .const import (
     CONF_DEVICE_ALIASES,
     CONF_NOTIFICATION_SERVICE,
     CONF_CAMERA_ENTITIES,
-    # Conversation settings
-    CONF_CONVERSATION_MEMORY,
-    CONF_MEMORY_MAX_MESSAGES,
     # Defaults
     DEFAULT_USE_NATIVE_INTENTS,
     DEFAULT_EXCLUDED_INTENTS,
@@ -111,8 +108,6 @@ from .const import (
     DEFAULT_DEVICE_ALIASES,
     DEFAULT_NOTIFICATION_SERVICE,
     DEFAULT_CAMERA_ENTITIES,
-    DEFAULT_CONVERSATION_MEMORY,
-    DEFAULT_MEMORY_MAX_MESSAGES,
     ALL_NATIVE_INTENTS,
 )
 
@@ -733,9 +728,6 @@ class LMStudioOptionsFlowHandler(config_entries.OptionsFlow):
     ) -> FlowResult:
         """Handle advanced settings."""
         if user_input is not None:
-            # Explicitly handle boolean - unchecked checkbox may not be in user_input
-            if CONF_CONVERSATION_MEMORY not in user_input:
-                user_input[CONF_CONVERSATION_MEMORY] = False
             new_options = {**self._entry.options, **user_input}
             return self.async_create_entry(title="", data=new_options)
 
@@ -745,14 +737,6 @@ class LMStudioOptionsFlowHandler(config_entries.OptionsFlow):
             step_id="advanced",
             data_schema=vol.Schema(
                 {
-                    vol.Required(
-                        CONF_CONVERSATION_MEMORY,
-                        default=current.get(CONF_CONVERSATION_MEMORY, False),
-                    ): selector.BooleanSelector(),
-                    vol.Optional(
-                        CONF_MEMORY_MAX_MESSAGES,
-                        default=current.get(CONF_MEMORY_MAX_MESSAGES, DEFAULT_MEMORY_MAX_MESSAGES),
-                    ): vol.All(vol.Coerce(int), vol.Range(min=2, max=50)),
                     vol.Optional(
                         CONF_LLM_HASS_API,
                         default=current.get(CONF_LLM_HASS_API, DEFAULT_LLM_HASS_API),

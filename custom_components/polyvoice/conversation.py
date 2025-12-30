@@ -83,9 +83,6 @@ from .const import (
     CONF_DEVICE_ALIASES,
     CONF_NOTIFICATION_SERVICE,
     CONF_CAMERA_ENTITIES,
-    # Conversation settings
-    CONF_CONVERSATION_MEMORY,
-    CONF_MEMORY_MAX_MESSAGES,
     # Defaults
     DEFAULT_EXCLUDED_INTENTS,
     DEFAULT_CUSTOM_EXCLUDED_INTENTS,
@@ -103,8 +100,6 @@ from .const import (
     DEFAULT_ENABLE_THERMOSTAT,
     DEFAULT_ENABLE_DEVICE_STATUS,
     DEFAULT_ENABLE_WIKIPEDIA,
-    DEFAULT_CONVERSATION_MEMORY,
-    DEFAULT_MEMORY_MAX_MESSAGES,
     CAMERA_FRIENDLY_NAMES,
     ALL_NATIVE_INTENTS,
 )
@@ -419,9 +414,6 @@ class LMStudioConversationEntity(ConversationEntity):
         # Tools cache (built once, reused for all requests)
         self._tools = None
 
-        # Conversation memory storage (keyed by conversation_id)
-        self._conversation_history: dict[str, list[dict]] = {}
-
         # Initialize config
         self._update_from_config({**config_entry.data, **config_entry.options})
 
@@ -565,10 +557,6 @@ class LMStudioConversationEntity(ConversationEntity):
                 camera_key.replace("_", " ").title()
             )
             self.camera_friendly_names[camera_key] = friendly_name
-
-        # Conversation memory settings
-        self.conversation_memory_enabled = config.get(CONF_CONVERSATION_MEMORY, DEFAULT_CONVERSATION_MEMORY)
-        self.memory_max_messages = config.get(CONF_MEMORY_MAX_MESSAGES, DEFAULT_MEMORY_MAX_MESSAGES)
 
         # Build tools list ONCE (major performance boost!)
         self._tools = self._build_tools()
