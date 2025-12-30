@@ -21,6 +21,8 @@ PROVIDER_ANTHROPIC: Final = "anthropic"
 PROVIDER_GOOGLE: Final = "google"
 PROVIDER_GROQ: Final = "groq"
 PROVIDER_OPENROUTER: Final = "openrouter"
+PROVIDER_AZURE: Final = "azure"
+PROVIDER_OLLAMA: Final = "ollama"
 
 ALL_PROVIDERS: Final = [
     PROVIDER_LM_STUDIO,
@@ -29,6 +31,8 @@ ALL_PROVIDERS: Final = [
     PROVIDER_GOOGLE,
     PROVIDER_GROQ,
     PROVIDER_OPENROUTER,
+    PROVIDER_AZURE,
+    PROVIDER_OLLAMA,
 ]
 
 PROVIDER_NAMES: Final = {
@@ -38,6 +42,8 @@ PROVIDER_NAMES: Final = {
     PROVIDER_GOOGLE: "Google Gemini",
     PROVIDER_GROQ: "Groq",
     PROVIDER_OPENROUTER: "OpenRouter",
+    PROVIDER_AZURE: "Azure OpenAI",
+    PROVIDER_OLLAMA: "Ollama (Local)",
 }
 
 # Default base URLs per provider
@@ -48,6 +54,8 @@ PROVIDER_BASE_URLS: Final = {
     PROVIDER_GOOGLE: "https://generativelanguage.googleapis.com/v1beta",
     PROVIDER_GROQ: "https://api.groq.com/openai/v1",
     PROVIDER_OPENROUTER: "https://openrouter.ai/api/v1",
+    PROVIDER_AZURE: "",  # User must provide: https://{resource}.openai.azure.com/openai/deployments/{deployment}
+    PROVIDER_OLLAMA: "http://localhost:11434/v1",
 }
 
 # Default models per provider
@@ -58,6 +66,8 @@ PROVIDER_DEFAULT_MODELS: Final = {
     PROVIDER_GOOGLE: "gemini-1.5-flash",
     PROVIDER_GROQ: "llama-3.3-70b-versatile",
     PROVIDER_OPENROUTER: "openai/gpt-4o-mini",
+    PROVIDER_AZURE: "gpt-4o-mini",  # Deployment name configured in Azure
+    PROVIDER_OLLAMA: "llama3.2",
 }
 
 # Suggested models per provider (for UI hints)
@@ -68,6 +78,8 @@ PROVIDER_MODELS: Final = {
     PROVIDER_GOOGLE: ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash-exp"],
     PROVIDER_GROQ: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
     PROVIDER_OPENROUTER: ["openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet", "google/gemini-flash-1.5"],
+    PROVIDER_AZURE: ["gpt-4o", "gpt-4o-mini", "gpt-4", "gpt-35-turbo"],
+    PROVIDER_OLLAMA: ["llama3.2", "llama3.1", "mistral", "codellama", "phi3"],
 }
 
 # Providers that use OpenAI-compatible API
@@ -76,6 +88,8 @@ OPENAI_COMPATIBLE_PROVIDERS: Final = [
     PROVIDER_OPENAI,
     PROVIDER_GROQ,
     PROVIDER_OPENROUTER,
+    PROVIDER_AZURE,
+    PROVIDER_OLLAMA,
 ]
 
 DEFAULT_PROVIDER: Final = PROVIDER_LM_STUDIO

@@ -13,7 +13,7 @@ from typing import Any, Literal
 import aiohttp
 import pytz
 import voluptuous as vol
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, AsyncAzureOpenAI
 
 from homeassistant.components import conversation
 from homeassistant.components.conversation import ConversationEntity
@@ -43,6 +43,8 @@ from .const import (
     PROVIDER_GOOGLE,
     PROVIDER_GROQ,
     PROVIDER_OPENROUTER,
+    PROVIDER_AZURE,
+    PROVIDER_OLLAMA,
     PROVIDER_BASE_URLS,
     OPENAI_COMPATIBLE_PROVIDERS,
     DEFAULT_PROVIDER,
@@ -410,12 +412,26 @@ class LMStudioConversationEntity(ConversationEntity):
         if not base_url:
             base_url = PROVIDER_BASE_URLS.get(self.provider, "http://localhost:1234/v1")
         self.base_url = base_url
-        
+
         # Create client for OpenAI-compatible providers
-        if self.provider in OPENAI_COMPATIBLE_PROVIDERS:
+        if self.provider == PROVIDER_AZURE:
+            # Azure OpenAI uses a different client with specific configuration
+            # Extract the azure endpoint from the base_url
+            # Expected format: https://{resource}.openai.azure.com/openai/deployments/{deployment}
+            # or just: https://{resource}.openai.azure.com
+            azure_endpoint = self.base_url
+            if "/openai/deployments/" in azure_endpoint:
+                azure_endpoint = azure_endpoint.split("/openai/deployments/")[0]
+            self.client = AsyncAzureOpenAI(
+                azure_endpoint=azure_endpoint,
+                api_key=self.api_key,
+                api_version="2024-02-01",
+            )
+        elif self.provider in OPENAI_COMPATIBLE_PROVIDERS:
+            # Standard OpenAI-compatible providers (LM Studio, OpenAI, Groq, OpenRouter, Ollama)
             self.client = AsyncOpenAI(
                 base_url=self.base_url,
-                api_key=self.api_key,
+                api_key=self.api_key if self.api_key else "ollama",  # Ollama doesn't require auth
             )
         else:
             # For Anthropic and Google, we'll use aiohttp directly
@@ -951,7 +967,7 @@ class LMStudioConversationEntity(ConversationEntity):
         elif self.provider == PROVIDER_GOOGLE:
             return await self._call_google(tools, user_input, max_tokens)
         else:
-            # OpenAI-compatible providers (LM Studio, OpenAI, Groq, OpenRouter)
+            # OpenAI-compatible providers (LM Studio, OpenAI, Groq, OpenRouter, Azure, Ollama)
             return await self._call_openai_compatible(tools, user_input, max_tokens)
 
     async def _call_anthropic(
@@ -1178,7 +1194,7 @@ class LMStudioConversationEntity(ConversationEntity):
         user_input: conversation.ConversationInput,
         max_tokens: int,
     ) -> str:
-        """Call OpenAI-compatible API (LM Studio, OpenAI, Groq, OpenRouter)."""
+        """Call OpenAI-compatible API (LM Studio, OpenAI, Groq, OpenRouter, Azure, Ollama)."""
         messages = []
         
         if self.system_prompt:
