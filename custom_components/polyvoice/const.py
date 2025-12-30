@@ -220,6 +220,12 @@ DEFAULT_EXCLUDED_INTENTS: Final = [
     "HassClimateGetTemperature",
     "HassClimateSetTemperature",
     "HassTimerStatus",
+    # Music intents - route to PolyVoice for Music Assistant control
+    "HassMediaNext",
+    "HassMediaPause",
+    "HassMediaPrevious",
+    "HassMediaUnpause",
+    "HassSetVolume",
 ]
 DEFAULT_CUSTOM_EXCLUDED_INTENTS: Final = ""
 DEFAULT_ENABLE_ASSIST: Final = True
