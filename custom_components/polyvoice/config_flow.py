@@ -745,10 +745,10 @@ class LMStudioOptionsFlowHandler(config_entries.OptionsFlow):
             step_id="advanced",
             data_schema=vol.Schema(
                 {
-                    vol.Optional(
+                    vol.Required(
                         CONF_CONVERSATION_MEMORY,
-                        default=current.get(CONF_CONVERSATION_MEMORY, DEFAULT_CONVERSATION_MEMORY),
-                    ): cv.boolean,
+                        default=current.get(CONF_CONVERSATION_MEMORY, False),
+                    ): selector.BooleanSelector(),
                     vol.Optional(
                         CONF_MEMORY_MAX_MESSAGES,
                         default=current.get(CONF_MEMORY_MAX_MESSAGES, DEFAULT_MEMORY_MAX_MESSAGES),
