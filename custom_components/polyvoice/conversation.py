@@ -3223,8 +3223,8 @@ class LMStudioConversationEntity(ConversationEntity):
                     "status": "error",
                     "error": f"Failed to check {friendly_name} camera: {str(err)}"
                 }
-        
-                elif tool_name == "analyze_camera":
+
+        elif tool_name == "analyze_camera":
             # Flexible camera analysis - works with any camera location
             location = arguments.get("location", "").lower().strip()
             query = arguments.get("query", "")
@@ -3291,7 +3291,7 @@ class LMStudioConversationEntity(ConversationEntity):
                     "error": f"Failed to check {friendly_name} camera: {str(err)}"
                 }
 
-elif tool_name == "get_restaurant_recommendations":
+        elif tool_name == "get_restaurant_recommendations":
             query = arguments.get("query", "")
             max_results = min(arguments.get("max_results", 5), 10)
             
