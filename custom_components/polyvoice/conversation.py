@@ -597,6 +597,11 @@ class LMStudioConversationEntity(ConversationEntity):
         )
         _LOGGER.info("Excluded intents: %s", self.excluded_intents)
 
+        # Log music config for debugging
+        if self.enable_music:
+            _LOGGER.warning("=== MUSIC CONFIG === players: %s, room_mapping: %s",
+                          self.music_players, self.room_player_mapping)
+
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
         """Return a list of supported languages."""
@@ -833,7 +838,8 @@ class LMStudioConversationEntity(ConversationEntity):
             })
 
         # ===== MUSIC CONTROL (if enabled and players configured) =====
-        if self.enable_music and self.music_players:
+        # Check BOTH music_players AND room_player_mapping - either one should enable the tool
+        if self.enable_music and (self.music_players or self.room_player_mapping):
             tools.append({
                 "type": "function",
                 "function": {
@@ -927,8 +933,13 @@ class LMStudioConversationEntity(ConversationEntity):
 
         _LOGGER.info("=== Incoming request: '%s' (conv_id: %s) ===", user_input.text, conversation_id[:8])
 
-        # All music goes to LLM - skip native intents for music keywords
-        text_lower = user_input.text.lower()
+        # LOCAL MUSIC HANDLER: Handle simple music commands directly (no LLM needed)
+        text_lower = user_input.text.lower().strip()
+        simple_music_result = await self._handle_simple_music_command(text_lower, user_input.language)
+        if simple_music_result is not None:
+            return simple_music_result
+
+        # Check for music keywords (for native intent bypass)
         is_music = any(kw in text_lower for kw in [
             'play', 'pause', 'resume', 'stop', 'skip', 'next', 'previous',
             'shuffle', 'music', 'song', 'track', 'album', 'artist', 'playlist'
@@ -964,6 +975,99 @@ class LMStudioConversationEntity(ConversationEntity):
                 response=intent_response,
                 conversation_id=conversation_id,
             )
+
+    async def _handle_simple_music_command(
+        self, query: str, language: str
+    ) -> conversation.ConversationResult | None:
+        """Handle simple music commands locally without LLM. Returns None if not a simple command."""
+        # Map simple commands to actions
+        simple_commands = {
+            "skip": "skip", "next": "skip", "skip track": "skip", "next track": "skip",
+            "skip song": "skip", "next song": "skip",
+            "pause": "pause", "pause music": "pause", "pause the music": "pause",
+            "stop": "stop", "stop music": "stop", "stop the music": "stop",
+            "resume": "resume", "resume music": "resume", "resume the music": "resume",
+            "unpause": "resume", "continue": "resume", "continue music": "resume",
+            "previous": "previous", "previous track": "previous", "previous song": "previous",
+            "go back": "previous", "last track": "previous", "last song": "previous",
+        }
+
+        action = simple_commands.get(query)
+        if not action:
+            return None  # Not a simple command, let LLM handle it
+
+        _LOGGER.warning("=== LOCAL MUSIC HANDLER === query='%s' action='%s'", query, action)
+
+        # Find the active player
+        target_player = None
+
+        # 1. Check for currently playing player from ALL known sources
+        all_players = self.music_players if self.music_players else []
+        room_to_player = dict(self.room_player_mapping)
+        all_known_players = set(all_players) | set(room_to_player.values())
+
+        for player in all_known_players:
+            state = self.hass.states.get(player)
+            if state and state.state == "playing":
+                target_player = player
+                _LOGGER.warning("=== FOUND PLAYING === %s", player)
+                break
+
+        # 2. For resume, also check for paused players
+        if not target_player and action == "resume":
+            for player in all_known_players:
+                state = self.hass.states.get(player)
+                if state and state.state == "paused":
+                    target_player = player
+                    _LOGGER.warning("=== FOUND PAUSED === %s", player)
+                    break
+
+        # 3. Fallback to helper entity
+        if not target_player:
+            helper_state = self.hass.states.get("input_text.current_music_player")
+            if helper_state and helper_state.state and helper_state.state != "unknown":
+                target_player = helper_state.state
+                _LOGGER.warning("=== USING HELPER === %s", target_player)
+
+        if not target_player:
+            intent_response = intent.IntentResponse(language=language)
+            intent_response.async_set_speech("No music playing.")
+            return conversation.ConversationResult(response=intent_response)
+
+        # Execute the action
+        service_map = {
+            "skip": ("media_player", "media_next_track"),
+            "previous": ("media_player", "media_previous_track"),
+            "pause": ("media_player", "media_pause"),
+            "resume": ("media_player", "media_play"),
+            "stop": ("media_player", "media_stop"),
+        }
+
+        domain, service = service_map[action]
+        _LOGGER.warning("=== EXECUTING === %s.%s on %s", domain, service, target_player)
+
+        try:
+            await self.hass.services.async_call(
+                domain, service,
+                {"entity_id": target_player},
+                blocking=True
+            )
+            response_text = {
+                "skip": "Skipped.",
+                "previous": "Previous track.",
+                "pause": "Paused.",
+                "resume": "Resumed.",
+                "stop": "Stopped.",
+            }.get(action, "Done.")
+
+            intent_response = intent.IntentResponse(language=language)
+            intent_response.async_set_speech(response_text)
+            return conversation.ConversationResult(response=intent_response)
+        except Exception as err:
+            _LOGGER.error("Music command failed: %s", err)
+            intent_response = intent.IntentResponse(language=language)
+            intent_response.async_set_speech(f"Failed: {err}")
+            return conversation.ConversationResult(response=intent_response)
 
     def _get_dynamic_max_tokens(self, query: str, tools: list) -> int:
         """SPEED OPTIMIZATION #2: Reduce max_tokens for simple queries."""
@@ -1366,132 +1470,6 @@ class LMStudioConversationEntity(ConversationEntity):
                     _LOGGER.debug("Skipping duplicate tool call: %s", tc['function']['name'])
             
             valid_tool_calls = unique_tool_calls
-
-            # FALLBACK: Parse tool calls from text (for models like Qwen that output as text)
-            # Skip if we already called control_music this session (any variant)
-            already_called_music = any(k.startswith("control_music:") for k in called_tools)
-            if not valid_tool_calls and accumulated_content and not already_called_music:
-                import re
-                content_lower = accumulated_content.lower()
-                parsed_args = None
-
-                # Pattern 1: control_music(...) function call in text
-                tool_match = re.search(r'control_music\s*\(\s*([^)]+)\s*\)', accumulated_content)
-                if tool_match:
-                    _LOGGER.warning("Detected text-based tool call, parsing: %s", tool_match.group(0))
-                    args_str = tool_match.group(1)
-                    parsed_args = {}
-                    for match in re.finditer(r'(\w+)\s*=\s*["\']?([^"\'",\)]+)["\']?', args_str):
-                        key, val = match.group(1), match.group(2).strip()
-                        if val.lower() == 'true':
-                            parsed_args[key] = True
-                        elif val.lower() == 'false':
-                            parsed_args[key] = False
-                        else:
-                            parsed_args[key] = val
-
-                # Pattern 2: "I'll play X" or "Playing X" or "Now playing X" (LLM responded conversationally)
-                if not parsed_args:
-                    play_patterns = [
-                        r"(?:i'll|i will|let me|going to|now)\s+play(?:ing)?\s+(.+?)(?:\s+(?:for you|in the|on the|now)|\.|$)",
-                        r"playing\s+(.+?)(?:\s+(?:for you|in the|on the|now)|\.|$)",
-                        r"(?:putting on|starting)\s+(.+?)(?:\s+(?:for you|in the|on the|now)|\.|$)",
-                    ]
-                    for pattern in play_patterns:
-                        match = re.search(pattern, content_lower)
-                        if match:
-                            query = match.group(1).strip()
-                            if query and len(query) > 1:
-                                _LOGGER.warning("=== FALLBACK DETECTED === LLM said '%s', extracting music request: '%s'", accumulated_content[:100], query)
-                                parsed_args = {"action": "play", "query": query}
-                                break
-
-                # Pattern 3: Skip/next track commands (LLM responded conversationally)
-                if not parsed_args:
-                    skip_patterns = [
-                        r"(?:i'll|i will|let me|going to|now)\s+skip",
-                        r"skipping\s+(?:the\s+)?(?:track|song|this)",
-                        r"(?:moving|going)\s+to\s+(?:the\s+)?next\s+(?:track|song)",
-                        r"(?:i'll|i will|let me)\s+(?:go|move)\s+to\s+(?:the\s+)?next",
-                        r"next\s+track",
-                        r"skipped",
-                    ]
-                    for pattern in skip_patterns:
-                        if re.search(pattern, content_lower):
-                            _LOGGER.warning("=== FALLBACK SKIP DETECTED === LLM said '%s'", accumulated_content[:100])
-                            parsed_args = {"action": "skip"}
-                            break
-
-                # Pattern 4: Pause commands
-                if not parsed_args:
-                    pause_patterns = [
-                        r"(?:i'll|i will|let me|going to|now)\s+pause",
-                        r"pausing\s+(?:the\s+)?(?:music|playback|track|song)",
-                        r"(?:music|playback)\s+paused",
-                    ]
-                    for pattern in pause_patterns:
-                        if re.search(pattern, content_lower):
-                            _LOGGER.warning("=== FALLBACK PAUSE DETECTED === LLM said '%s'", accumulated_content[:100])
-                            parsed_args = {"action": "pause"}
-                            break
-
-                # Pattern 5: Resume commands
-                if not parsed_args:
-                    resume_patterns = [
-                        r"(?:i'll|i will|let me|going to|now)\s+resume",
-                        r"resuming\s+(?:the\s+)?(?:music|playback|track|song)",
-                        r"(?:music|playback)\s+resumed",
-                        r"(?:i'll|i will|let me)\s+(?:continue|unpause)",
-                    ]
-                    for pattern in resume_patterns:
-                        if re.search(pattern, content_lower):
-                            _LOGGER.warning("=== FALLBACK RESUME DETECTED === LLM said '%s'", accumulated_content[:100])
-                            parsed_args = {"action": "resume"}
-                            break
-
-                # Pattern 6: Stop commands
-                if not parsed_args:
-                    stop_patterns = [
-                        r"(?:i'll|i will|let me|going to|now)\s+stop",
-                        r"stopping\s+(?:the\s+)?(?:music|playback|track|song)",
-                        r"(?:music|playback)\s+stopped",
-                    ]
-                    for pattern in stop_patterns:
-                        if re.search(pattern, content_lower):
-                            _LOGGER.warning("=== FALLBACK STOP DETECTED === LLM said '%s'", accumulated_content[:100])
-                            parsed_args = {"action": "stop"}
-                            break
-
-                # Pattern 7: Previous track commands
-                if not parsed_args:
-                    previous_patterns = [
-                        r"(?:i'll|i will|let me|going to|now)\s+(?:go\s+)?(?:back|previous)",
-                        r"(?:going|moving)\s+(?:back\s+)?to\s+(?:the\s+)?previous\s+(?:track|song)",
-                        r"previous\s+track",
-                    ]
-                    for pattern in previous_patterns:
-                        if re.search(pattern, content_lower):
-                            _LOGGER.warning("=== FALLBACK PREVIOUS DETECTED === LLM said '%s'", accumulated_content[:100])
-                            parsed_args = {"action": "previous"}
-                            break
-
-                if parsed_args:
-                    # Check if we already called control_music (prevent duplicates)
-                    tool_key = f"control_music:{json.dumps(parsed_args, sort_keys=True)}"
-                    if tool_key not in called_tools:
-                        called_tools.add(tool_key)
-                        _LOGGER.warning("Parsed text tool call: control_music(%s)", parsed_args)
-                        valid_tool_calls = [{
-                            "id": "text_parsed_1",
-                            "type": "function",
-                            "function": {
-                                "name": "control_music",
-                                "arguments": json.dumps(parsed_args)
-                            }
-                        }]
-                        accumulated_content = ""  # Clear the text since we're executing the tool
-                    else:
-                        _LOGGER.debug("Skipping duplicate fallback tool call: control_music")
 
             if valid_tool_calls:
                 _LOGGER.info("Processing %d tool call(s)", len(valid_tool_calls))
