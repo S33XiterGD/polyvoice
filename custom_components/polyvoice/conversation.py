@@ -1962,75 +1962,38 @@ class LMStudioConversationEntity(ConversationEntity):
                 headers = {"User-Agent": "HomeAssistant-PolyVoice/1.0"}
                 team_key = team_name.lower().strip()
 
-                # Search for team across major leagues using ESPN search API
-                search_url = f"https://site.api.espn.com/apis/site/v2/sports/search?query={urllib.parse.quote(team_name)}&limit=5"
-                async with self._session.get(search_url, headers=headers) as resp:
-                    if resp.status == 200:
-                        search_data = await resp.json()
-                        results = search_data.get("results", [])
+                # Search for team in major US leagues directly (search API is deprecated)
+                leagues_to_try = [
+                    ("basketball", "nba"),
+                    ("football", "nfl"),
+                    ("baseball", "mlb"),
+                    ("hockey", "nhl"),
+                ]
 
-                        # Find first team result
-                        team_result = None
-                        for result in results:
-                            if result.get("type") == "team":
-                                team_result = result
-                                break
-
-                        if team_result:
-                            # Extract team info from search result
-                            team_id = team_result.get("id", "")
-                            full_name = team_result.get("displayName", team_name)
-                            # Parse the link to get sport/league info
-                            link = team_result.get("link", "")
-
-                            # Try to construct schedule URL from the link
-                            # Link format example: /nba/team/_/id/14/miami-heat
-                            if "/nba/" in link:
-                                url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/{team_id}/schedule"
-                            elif "/nfl/" in link:
-                                url = f"https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/{team_id}/schedule"
-                            elif "/mlb/" in link:
-                                url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/teams/{team_id}/schedule"
-                            elif "/nhl/" in link:
-                                url = f"https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/teams/{team_id}/schedule"
-                            elif "/soccer/" in link:
-                                # Try to extract league from link
-                                url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/usa.1/teams/{team_id}/schedule"
-                            else:
-                                return {"error": f"Unsupported sport for team '{team_name}'"}
-                        else:
-                            # Fallback: try direct search in major US leagues
-                            leagues_to_try = [
-                                ("basketball", "nba"),
-                                ("football", "nfl"),
-                                ("baseball", "mlb"),
-                                ("hockey", "nhl"),
-                            ]
-
-                            team_found = False
-                            for sport, league in leagues_to_try:
-                                teams_url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams"
-                                async with self._session.get(teams_url, headers=headers) as teams_resp:
-                                    if teams_resp.status == 200:
-                                        teams_data = await teams_resp.json()
-                                        for team in teams_data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", []):
-                                            t = team.get("team", {})
-                                            if (team_key in t.get("displayName", "").lower() or
-                                                team_key in t.get("shortDisplayName", "").lower() or
-                                                team_key in t.get("nickname", "").lower() or
-                                                team_key == t.get("abbreviation", "").lower()):
-                                                team_id = t.get("id", "")
-                                                full_name = t.get("displayName", team_name)
-                                                url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams/{team_id}/schedule"
-                                                team_found = True
-                                                break
-                                if team_found:
+                team_found = False
+                url = None
+                full_name = team_name
+                for sport, league in leagues_to_try:
+                    teams_url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams"
+                    async with self._session.get(teams_url, headers=headers) as teams_resp:
+                        if teams_resp.status == 200:
+                            teams_data = await teams_resp.json()
+                            for team in teams_data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", []):
+                                t = team.get("team", {})
+                                if (team_key in t.get("displayName", "").lower() or
+                                    team_key in t.get("shortDisplayName", "").lower() or
+                                    team_key in t.get("nickname", "").lower() or
+                                    team_key == t.get("abbreviation", "").lower()):
+                                    team_id = t.get("id", "")
+                                    full_name = t.get("displayName", team_name)
+                                    url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams/{team_id}/schedule"
+                                    team_found = True
                                     break
+                    if team_found:
+                        break
 
-                            if not team_found:
-                                return {"error": f"Team '{team_name}' not found. Try the full team name (e.g., 'Miami Heat', 'New York Yankees')"}
-                    else:
-                        return {"error": f"ESPN search failed: {resp.status}"}
+                if not team_found:
+                    return {"error": f"Team '{team_name}' not found. Try the full team name (e.g., 'Miami Heat', 'New York Yankees')"}
                 
                 async with self._session.get(url, headers=headers) as resp:
                     if resp.status != 200:
