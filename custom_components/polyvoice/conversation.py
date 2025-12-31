@@ -3138,23 +3138,27 @@ class LMStudioConversationEntity(ConversationEntity):
             try:
                 # ===== PLAY ACTION =====
                 if action == "play":
+                    _LOGGER.warning("=== PLAY ACTION START === query='%s', room='%s', shuffle=%s", query, room, shuffle)
+
                     if not query:
                         return {"error": "What would you like to play?"}
 
                     # Priority: room mapping → last active player → default player
                     if room:
                         target_player = find_player_for_room(room)
+                        _LOGGER.warning("=== PLAY TARGET (from room) === room='%s' -> player='%s'", room, target_player)
                     else:
                         target_player = get_last_active_player()
-                        if target_player:
-                            _LOGGER.warning("=== PLAY USING HELPER === No room specified, using last active: %s", target_player)
+                        _LOGGER.warning("=== PLAY TARGET (from helper) === helper value='%s'", target_player)
 
                     if not target_player:
                         target_player = default_player
+                        _LOGGER.warning("=== PLAY TARGET (fallback to default) === player='%s'", target_player)
+
                     if not target_player:
                         return {"error": "No music player found. Please configure music players in PolyVoice settings."}
 
-                    _LOGGER.info("Playing '%s' on %s (shuffle=%s)", query, target_player, shuffle)
+                    _LOGGER.warning("=== PLAY EXECUTING === Playing '%s' on %s (shuffle=%s)", query, target_player, shuffle)
 
                     # If shuffle requested, enable shuffle FIRST
                     if shuffle:
@@ -3184,7 +3188,9 @@ class LMStudioConversationEntity(ConversationEntity):
                         _LOGGER.info("Skipped to fresh shuffle position")
 
                     # Update last active speaker helper
+                    _LOGGER.warning("=== PLAY UPDATING HELPER === About to set helper to: %s", target_player)
                     await set_last_active_player(target_player)
+                    _LOGGER.warning("=== PLAY COMPLETE === Helper updated, returning success")
 
                     room_name = room if room else get_room_name(target_player)
                     msg = f"Shuffling {query}" if shuffle else f"Playing {query}"
