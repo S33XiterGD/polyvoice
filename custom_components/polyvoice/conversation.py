@@ -921,6 +921,8 @@ class LMStudioConversationEntity(ConversationEntity):
     ) -> conversation.ConversationResult | None:
         """Simple music commands → active player from helper."""
 
+        _LOGGER.warning("=== _handle_simple_music CALLED === text='%s'", text)
+
         # Get active player: helper → playing → default
         helper = self.last_active_speaker or "input_text.current_music_player"
         state = self.hass.states.get(helper)
@@ -989,9 +991,12 @@ class LMStudioConversationEntity(ConversationEntity):
         text_lower = user_input.text.lower().strip()
 
         # SIMPLE MUSIC COMMANDS - instant, context-aware, no LLM needed
+        _LOGGER.warning("=== CHECKING SIMPLE MUSIC === enable_music=%s, music_players=%s, text='%s'",
+                       self.enable_music, bool(self.music_players), text_lower)
         if self.enable_music and self.music_players:
             simple_result = await self._handle_simple_music(text_lower, user_input.language, conversation_id)
             if simple_result is not None:
+                _LOGGER.warning("=== SIMPLE MUSIC HANDLED === returning early")
                 return simple_result
 
         # Native intents for non-music commands (lights, switches, etc.)
