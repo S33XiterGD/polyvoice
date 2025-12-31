@@ -834,7 +834,7 @@ class LMStudioConversationEntity(ConversationEntity):
                 "type": "function",
                 "function": {
                     "name": "control_music",
-                    "description": "Control music via Music Assistant. Actions: 'play' (start music), 'transfer' (move to room), 'skip' (next track), 'previous' (previous track), 'pause', 'resume'.",
+                    "description": "ALWAYS use this for ANY music request. Use for: 'play [artist/song/genre]', 'play music', 'put on some [genre]', 'shuffle [artist]', 'skip', 'next track', 'previous', 'pause', 'resume', 'stop the music', 'transfer music to [room]'. Actions: play, transfer, skip, previous, pause, resume.",
                     "parameters": {
                         "type": "object",
                         "properties": {
