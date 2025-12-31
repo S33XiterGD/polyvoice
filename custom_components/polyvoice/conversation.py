@@ -3242,11 +3242,14 @@ class LMStudioConversationEntity(ConversationEntity):
                 else:
                     _LOGGER.warning("Cannot update last active speaker: helper=%s, player=%s", self.last_active_speaker, player)
 
-            # Helper to find currently playing player (only from configured music_players)
+            # Helper to find currently playing player (check ALL known players including room mapping)
             def find_playing_player() -> str | None:
-                for player in all_players:
+                # Check all players from room mapping + music_players
+                all_known_players = set(all_players) | set(room_to_player.values())
+                for player in all_known_players:
                     state = self.hass.states.get(player)
                     if state and state.state == "playing":
+                        _LOGGER.warning("=== FOUND PLAYING PLAYER === %s", player)
                         return player
                 return None
 
