@@ -914,6 +914,118 @@ class LMStudioConversationEntity(ConversationEntity):
         
         return tools
 
+    async def _handle_hardcoded_music(
+        self, user_input: conversation.ConversationInput, conversation_id: str
+    ) -> conversation.ConversationResult | None:
+        """Handle simple music commands directly without LLM - much more reliable."""
+        import re
+        text = user_input.text.lower().strip()
+
+        # Get helper functions
+        def get_last_active_player() -> str | None:
+            helper_entity = "input_text.current_music_player"
+            state = self.hass.states.get(helper_entity)
+            if state and state.state not in ("unknown", "unavailable", ""):
+                return state.state
+            return None
+
+        def find_playing_player() -> str | None:
+            for player in self.music_players:
+                state = self.hass.states.get(player)
+                if state and state.state == "playing":
+                    return player
+            return None
+
+        default_player = self.music_players[0] if self.music_players else None
+
+        def get_target_player() -> str | None:
+            target = get_last_active_player()
+            if not target:
+                target = find_playing_player()
+            if not target:
+                target = default_player
+            return target
+
+        def make_response(message: str) -> conversation.ConversationResult:
+            intent_response = intent.IntentResponse(language=user_input.language)
+            intent_response.async_set_speech(message)
+            return conversation.ConversationResult(
+                response=intent_response,
+                conversation_id=conversation_id,
+            )
+
+        # SKIP / NEXT patterns
+        if re.match(r'^(skip|next|next track|next song|skip track|skip song|skip this)$', text):
+            target = get_target_player()
+            if target:
+                _LOGGER.warning("=== HARDCODED SKIP === target=%s", target)
+                await self.hass.services.async_call(
+                    "media_player", "media_next_track",
+                    {"entity_id": target},
+                    blocking=True
+                )
+                return make_response("Skipped to next track")
+            return make_response("No music player found")
+
+        # PREVIOUS patterns
+        if re.match(r'^(previous|prev|previous track|previous song|go back|last track|last song)$', text):
+            target = get_target_player()
+            if target:
+                _LOGGER.warning("=== HARDCODED PREVIOUS === target=%s", target)
+                await self.hass.services.async_call(
+                    "media_player", "media_previous_track",
+                    {"entity_id": target},
+                    blocking=True
+                )
+                return make_response("Playing previous track")
+            return make_response("No music player found")
+
+        # PAUSE patterns
+        if re.match(r'^(pause|pause music|pause the music|stop music|hold)$', text):
+            target = get_target_player()
+            if target:
+                _LOGGER.warning("=== HARDCODED PAUSE === target=%s", target)
+                await self.hass.services.async_call(
+                    "media_player", "media_pause",
+                    {"entity_id": target},
+                    blocking=True
+                )
+                return make_response("Music paused")
+            return make_response("No music player found")
+
+        # RESUME patterns
+        if re.match(r'^(resume|resume music|continue|unpause|play|keep playing)$', text):
+            target = get_target_player()
+            if target:
+                state = self.hass.states.get(target)
+                # Only resume if paused, otherwise let LLM handle "play X"
+                if state and state.state == "paused":
+                    _LOGGER.warning("=== HARDCODED RESUME === target=%s", target)
+                    await self.hass.services.async_call(
+                        "media_player", "media_play",
+                        {"entity_id": target},
+                        blocking=True
+                    )
+                    return make_response("Music resumed")
+            # If not paused, let LLM handle it (might be "play jazz")
+            return None
+
+        # STOP patterns
+        if re.match(r'^(stop|stop music|stop the music|stop playing)$', text):
+            target = get_target_player()
+            if target:
+                _LOGGER.warning("=== HARDCODED STOP === target=%s", target)
+                await self.hass.services.async_call(
+                    "media_player", "media_stop",
+                    {"entity_id": target},
+                    blocking=True
+                )
+                return make_response("Music stopped")
+            return make_response("No music player found")
+
+        # Not a hardcoded command - let LLM handle it
+        return None
+
     async def async_process(
         self, user_input: conversation.ConversationInput
     ) -> conversation.ConversationResult:
@@ -924,7 +1036,13 @@ class LMStudioConversationEntity(ConversationEntity):
         self._current_user_query = user_input.text
         
         _LOGGER.info("=== Incoming request: '%s' (conv_id: %s) ===", user_input.text, conversation_id[:8])
-        
+
+        # HARDCODED MUSIC COMMANDS - bypass LLM entirely for reliability
+        if self.enable_music and self.music_players:
+            hardcoded_result = await self._handle_hardcoded_music(user_input, conversation_id)
+            if hardcoded_result is not None:
+                return hardcoded_result
+
         if self.use_native_intents:
             native_result = await self._try_native_intent(user_input, conversation_id)
             if native_result is not None:
