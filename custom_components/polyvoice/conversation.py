@@ -552,9 +552,11 @@ class LMStudioConversationEntity(ConversationEntity):
 
         # Room to player explicit mapping (e.g., "living room: media_player.chromecast")
         self.room_player_mapping = parse_entity_config(config.get(CONF_ROOM_PLAYER_MAPPING, ""))
+        _LOGGER.debug("Room player mapping: %s", self.room_player_mapping)
 
         self.last_active_speaker = config.get(CONF_LAST_ACTIVE_SPEAKER, "")
-        _LOGGER.info("Loaded last_active_speaker from config: '%s'", self.last_active_speaker)
+        _LOGGER.info("Loaded last_active_speaker from config: '%s' (key in config: %s)",
+                     self.last_active_speaker, CONF_LAST_ACTIVE_SPEAKER in config)
         self.device_aliases = parse_entity_config(config.get(CONF_DEVICE_ALIASES, ""))
         self.notification_service = config.get(CONF_NOTIFICATION_SERVICE, "")
 
