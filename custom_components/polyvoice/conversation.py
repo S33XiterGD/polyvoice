@@ -554,6 +554,7 @@ class LMStudioConversationEntity(ConversationEntity):
         self.room_player_mapping = parse_entity_config(config.get(CONF_ROOM_PLAYER_MAPPING, ""))
 
         self.last_active_speaker = config.get(CONF_LAST_ACTIVE_SPEAKER, "")
+        _LOGGER.info("Loaded last_active_speaker from config: '%s'", self.last_active_speaker)
         self.device_aliases = parse_entity_config(config.get(CONF_DEVICE_ALIASES, ""))
         self.notification_service = config.get(CONF_NOTIFICATION_SERVICE, "")
 
@@ -3072,13 +3073,19 @@ class LMStudioConversationEntity(ConversationEntity):
 
             # Helper to update the last active speaker
             async def set_last_active_player(player: str):
+                _LOGGER.info("set_last_active_player called: player=%s, helper=%s", player, self.last_active_speaker)
                 if self.last_active_speaker and player:
-                    await self.hass.services.async_call(
-                        "input_text", "set_value",
-                        {"entity_id": self.last_active_speaker, "value": player},
-                        blocking=True
-                    )
-                    _LOGGER.info("Updated last active speaker to: %s", player)
+                    try:
+                        await self.hass.services.async_call(
+                            "input_text", "set_value",
+                            {"entity_id": self.last_active_speaker, "value": player},
+                            blocking=True
+                        )
+                        _LOGGER.info("Successfully updated last active speaker to: %s", player)
+                    except Exception as e:
+                        _LOGGER.error("Failed to update last active speaker: %s", e)
+                else:
+                    _LOGGER.warning("Cannot update last active speaker: helper=%s, player=%s", self.last_active_speaker, player)
 
             # Helper to find currently playing player (only from configured music_players)
             def find_playing_player() -> str | None:
