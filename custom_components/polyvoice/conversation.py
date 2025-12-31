@@ -3342,17 +3342,15 @@ class LMStudioConversationEntity(ConversationEntity):
 
                 # ===== SKIP ACTION =====
                 elif action == "skip":
-                    # Priority: 1. last_active_speaker helper, 2. currently playing, 3. default
-                    target_player = get_last_active_player()
+                    # Find playing player FIRST, fallback to helper
+                    target_player = find_playing_player()
                     if not target_player:
-                        target_player = find_playing_player()
-                    if not target_player:
-                        target_player = default_player
+                        target_player = get_last_active_player()
 
                     if not target_player:
-                        return {"error": "No music player found. Please specify a room or configure a default player."}
+                        return {"error": "No music playing to skip."}
 
-                    _LOGGER.info("Skipping to next track on %s", target_player)
+                    _LOGGER.warning("=== SKIP === %s", target_player)
                     await self.hass.services.async_call(
                         "media_player", "media_next_track",
                         {"entity_id": target_player},
@@ -3362,17 +3360,15 @@ class LMStudioConversationEntity(ConversationEntity):
 
                 # ===== PREVIOUS ACTION =====
                 elif action == "previous":
-                    # Priority: 1. last_active_speaker helper, 2. currently playing, 3. default
-                    target_player = get_last_active_player()
+                    # Find playing player FIRST, fallback to helper
+                    target_player = find_playing_player()
                     if not target_player:
-                        target_player = find_playing_player()
-                    if not target_player:
-                        target_player = default_player
+                        target_player = get_last_active_player()
 
                     if not target_player:
-                        return {"error": "No music player found. Please specify a room or configure a default player."}
+                        return {"error": "No music playing to go back."}
 
-                    _LOGGER.info("Going to previous track on %s", target_player)
+                    _LOGGER.warning("=== PREVIOUS === %s", target_player)
                     await self.hass.services.async_call(
                         "media_player", "media_previous_track",
                         {"entity_id": target_player},
@@ -3382,17 +3378,15 @@ class LMStudioConversationEntity(ConversationEntity):
 
                 # ===== PAUSE ACTION =====
                 elif action == "pause":
-                    # Priority: 1. last_active_speaker helper, 2. currently playing, 3. default
-                    target_player = get_last_active_player()
+                    # Find playing player FIRST, fallback to helper
+                    target_player = find_playing_player()
                     if not target_player:
-                        target_player = find_playing_player()
-                    if not target_player:
-                        target_player = default_player
+                        target_player = get_last_active_player()
 
                     if not target_player:
-                        return {"error": "No music player found. Please specify a room or configure a default player."}
+                        return {"error": "No music playing to pause."}
 
-                    _LOGGER.info("Pausing music on %s", target_player)
+                    _LOGGER.warning("=== PAUSE === %s", target_player)
                     await self.hass.services.async_call(
                         "media_player", "media_pause",
                         {"entity_id": target_player},
@@ -3402,22 +3396,25 @@ class LMStudioConversationEntity(ConversationEntity):
 
                 # ===== RESUME ACTION =====
                 elif action == "resume":
-                    # Priority: 1. last_active_speaker helper, 2. paused player, 3. default
-                    target_player = get_last_active_player()
+                    # Find paused player from ALL known players (including room mapping)
+                    all_known_players = set(all_players) | set(room_to_player.values())
+                    target_player = None
+
+                    for player in all_known_players:
+                        state = self.hass.states.get(player)
+                        if state and state.state == "paused":
+                            target_player = player
+                            _LOGGER.warning("=== FOUND PAUSED === %s", player)
+                            break
+
+                    # Fallback to helper
                     if not target_player:
-                        # Find paused player
-                        for player in all_players:
-                            state = self.hass.states.get(player)
-                            if state and state.state == "paused":
-                                target_player = player
-                                break
-                    if not target_player:
-                        target_player = default_player
+                        target_player = get_last_active_player()
 
                     if not target_player:
-                        return {"error": "No music player found. Please specify a room or configure a default player."}
+                        return {"error": "No paused music found."}
 
-                    _LOGGER.info("Resuming music on %s", target_player)
+                    _LOGGER.warning("=== RESUME === %s", target_player)
                     await self.hass.services.async_call(
                         "media_player", "media_play",
                         {"entity_id": target_player},
@@ -3427,17 +3424,15 @@ class LMStudioConversationEntity(ConversationEntity):
 
                 # ===== STOP ACTION =====
                 elif action == "stop":
-                    # Priority: 1. last_active_speaker helper, 2. currently playing, 3. default
-                    target_player = get_last_active_player()
+                    # Find playing player FIRST, fallback to helper
+                    target_player = find_playing_player()
                     if not target_player:
-                        target_player = find_playing_player()
-                    if not target_player:
-                        target_player = default_player
+                        target_player = get_last_active_player()
 
                     if not target_player:
-                        return {"error": "No music player found. Please specify a room or configure a default player."}
+                        return {"error": "No music playing to stop."}
 
-                    _LOGGER.info("Stopping music on %s", target_player)
+                    _LOGGER.warning("=== STOP === %s", target_player)
                     await self.hass.services.async_call(
                         "media_player", "media_stop",
                         {"entity_id": target_player},
