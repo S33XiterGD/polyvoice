@@ -986,17 +986,19 @@ class LMStudioConversationEntity(ConversationEntity):
             )
             
             _LOGGER.debug("Native converse response_type: %s", result.response.response_type)
-            
+
             # Check if we got an intent result
             if hasattr(result.response, 'intent') and result.response.intent is not None:
                 intent_type = result.response.intent.intent_type
-                _LOGGER.debug("Native intent type: %s", intent_type)
-                
+                _LOGGER.warning("=== NATIVE INTENT MATCHED === type='%s' for: '%s'", intent_type, user_input.text[:80])
+
                 # Check if this intent is in our excluded list
                 if intent_type in self.excluded_intents:
-                    _LOGGER.info("Intent '%s' EXCLUDED - sending to LLM", intent_type)
+                    _LOGGER.warning("=== INTENT EXCLUDED === '%s' - sending to LLM", intent_type)
                     return None
-            
+                else:
+                    _LOGGER.warning("=== INTENT NOT EXCLUDED === '%s' - will be handled natively", intent_type)
+
             # ACTION_DONE = command executed (turn on light, etc)
             if result.response.response_type == intent.IntentResponseType.ACTION_DONE:
                 # Check for nonsense responses that indicate mismatched intent
