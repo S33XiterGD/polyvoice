@@ -414,10 +414,6 @@ class LMStudioConversationEntity(ConversationEntity):
         # Tools cache (built once, reused for all requests)
         self._tools = None
 
-        # Debounce for skip/previous to prevent double execution
-        self._last_skip_time = None
-        self._last_previous_time = None
-
         # Initialize config
         self._update_from_config({**config_entry.data, **config_entry.options})
 
@@ -3136,13 +3132,6 @@ class LMStudioConversationEntity(ConversationEntity):
 
                 # ===== SKIP ACTION =====
                 elif action == "skip":
-                    # Debounce: ignore if skip was called in the last 2 seconds
-                    now = datetime.now()
-                    if self._last_skip_time and (now - self._last_skip_time).total_seconds() < 2.0:
-                        _LOGGER.warning("Skip debounced - ignoring duplicate request")
-                        return {"status": "skipped", "message": "Skipped to next track"}
-                    self._last_skip_time = now
-
                     # Find currently playing player
                     playing_player = None
                     for player in all_players:
@@ -3163,13 +3152,6 @@ class LMStudioConversationEntity(ConversationEntity):
 
                 # ===== PREVIOUS ACTION =====
                 elif action == "previous":
-                    # Debounce: ignore if previous was called in the last 2 seconds
-                    now = datetime.now()
-                    if self._last_previous_time and (now - self._last_previous_time).total_seconds() < 2.0:
-                        _LOGGER.warning("Previous debounced - ignoring duplicate request")
-                        return {"status": "previous", "message": "Playing previous track"}
-                    self._last_previous_time = now
-
                     playing_player = None
                     for player in all_players:
                         state = self.hass.states.get(player)
