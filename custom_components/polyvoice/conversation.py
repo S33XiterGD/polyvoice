@@ -1398,6 +1398,75 @@ class LMStudioConversationEntity(ConversationEntity):
                                 parsed_args = {"action": "play", "query": query}
                                 break
 
+                # Pattern 3: Skip/next track commands (LLM responded conversationally)
+                if not parsed_args:
+                    skip_patterns = [
+                        r"(?:i'll|i will|let me|going to|now)\s+skip",
+                        r"skipping\s+(?:the\s+)?(?:track|song|this)",
+                        r"(?:moving|going)\s+to\s+(?:the\s+)?next\s+(?:track|song)",
+                        r"(?:i'll|i will|let me)\s+(?:go|move)\s+to\s+(?:the\s+)?next",
+                        r"next\s+track",
+                        r"skipped",
+                    ]
+                    for pattern in skip_patterns:
+                        if re.search(pattern, content_lower):
+                            _LOGGER.warning("=== FALLBACK SKIP DETECTED === LLM said '%s'", accumulated_content[:100])
+                            parsed_args = {"action": "skip"}
+                            break
+
+                # Pattern 4: Pause commands
+                if not parsed_args:
+                    pause_patterns = [
+                        r"(?:i'll|i will|let me|going to|now)\s+pause",
+                        r"pausing\s+(?:the\s+)?(?:music|playback|track|song)",
+                        r"(?:music|playback)\s+paused",
+                    ]
+                    for pattern in pause_patterns:
+                        if re.search(pattern, content_lower):
+                            _LOGGER.warning("=== FALLBACK PAUSE DETECTED === LLM said '%s'", accumulated_content[:100])
+                            parsed_args = {"action": "pause"}
+                            break
+
+                # Pattern 5: Resume commands
+                if not parsed_args:
+                    resume_patterns = [
+                        r"(?:i'll|i will|let me|going to|now)\s+resume",
+                        r"resuming\s+(?:the\s+)?(?:music|playback|track|song)",
+                        r"(?:music|playback)\s+resumed",
+                        r"(?:i'll|i will|let me)\s+(?:continue|unpause)",
+                    ]
+                    for pattern in resume_patterns:
+                        if re.search(pattern, content_lower):
+                            _LOGGER.warning("=== FALLBACK RESUME DETECTED === LLM said '%s'", accumulated_content[:100])
+                            parsed_args = {"action": "resume"}
+                            break
+
+                # Pattern 6: Stop commands
+                if not parsed_args:
+                    stop_patterns = [
+                        r"(?:i'll|i will|let me|going to|now)\s+stop",
+                        r"stopping\s+(?:the\s+)?(?:music|playback|track|song)",
+                        r"(?:music|playback)\s+stopped",
+                    ]
+                    for pattern in stop_patterns:
+                        if re.search(pattern, content_lower):
+                            _LOGGER.warning("=== FALLBACK STOP DETECTED === LLM said '%s'", accumulated_content[:100])
+                            parsed_args = {"action": "stop"}
+                            break
+
+                # Pattern 7: Previous track commands
+                if not parsed_args:
+                    previous_patterns = [
+                        r"(?:i'll|i will|let me|going to|now)\s+(?:go\s+)?(?:back|previous)",
+                        r"(?:going|moving)\s+(?:back\s+)?to\s+(?:the\s+)?previous\s+(?:track|song)",
+                        r"previous\s+track",
+                    ]
+                    for pattern in previous_patterns:
+                        if re.search(pattern, content_lower):
+                            _LOGGER.warning("=== FALLBACK PREVIOUS DETECTED === LLM said '%s'", accumulated_content[:100])
+                            parsed_args = {"action": "previous"}
+                            break
+
                 if parsed_args:
                     # Check if we already called control_music (prevent duplicates)
                     tool_key = f"control_music:{json.dumps(parsed_args, sort_keys=True)}"
