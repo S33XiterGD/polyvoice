@@ -229,10 +229,20 @@ DEFAULT_EXCLUDED_INTENTS: Final = [
     "HassClimateGetTemperature",
     "HassClimateSetTemperature",
     "HassTimerStatus",
+    # ALL music intents - send to LLM for better control
     "HassMediaPause",
     "HassMediaUnpause",
     "HassMediaNext",
     "HassMediaPrevious",
+    "HassMediaPlay",
+    "HassPlayMedia",
+    "HassMediaShuffle",
+    "HassMediaRepeat",
+    "HassMediaStop",
+    "HassMediaMute",
+    "HassSetVolume",
+    "HassVolumeUp",
+    "HassVolumeDown",
 ]
 DEFAULT_CUSTOM_EXCLUDED_INTENTS: Final = ""
 DEFAULT_ENABLE_ASSIST: Final = True
