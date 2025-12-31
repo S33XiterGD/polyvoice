@@ -836,7 +836,7 @@ class LMStudioConversationEntity(ConversationEntity):
                 "type": "function",
                 "function": {
                     "name": "control_music",
-                    "description": "ALWAYS use this for ANY music request. Use for: 'play [artist/song/genre]', 'play music', 'put on some [genre]', 'shuffle [artist]', 'skip', 'next track', 'previous', 'pause', 'resume', 'stop the music', 'transfer music to [room]'. Actions: play, transfer, skip, previous, pause, resume.",
+                    "description": "REQUIRED for ALL music commands - you MUST call this tool whenever user mentions music. Trigger words: 'play', 'put on', 'I want to hear', 'listen to', 'shuffle', 'skip', 'next', 'previous', 'pause', 'resume', 'stop'. Example: 'play jazz' -> call control_music(action='play', query='jazz'). NEVER respond to music requests without calling this tool first.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -1359,13 +1359,15 @@ class LMStudioConversationEntity(ConversationEntity):
 
             # FALLBACK: Parse tool calls from text (for models like Qwen that output as text)
             if not valid_tool_calls and accumulated_content:
-                # Check for control_music pattern in text
                 import re
+                content_lower = accumulated_content.lower()
+                parsed_args = None
+
+                # Pattern 1: control_music(...) function call in text
                 tool_match = re.search(r'control_music\s*\(\s*([^)]+)\s*\)', accumulated_content)
                 if tool_match:
                     _LOGGER.warning("Detected text-based tool call, parsing: %s", tool_match.group(0))
                     args_str = tool_match.group(1)
-                    # Parse key=value pairs
                     parsed_args = {}
                     for match in re.finditer(r'(\w+)\s*=\s*["\']?([^"\'",\)]+)["\']?', args_str):
                         key, val = match.group(1), match.group(2).strip()
@@ -1376,17 +1378,33 @@ class LMStudioConversationEntity(ConversationEntity):
                         else:
                             parsed_args[key] = val
 
-                    if parsed_args:
-                        _LOGGER.warning("Parsed text tool call: control_music(%s)", parsed_args)
-                        valid_tool_calls = [{
-                            "id": "text_parsed_1",
-                            "type": "function",
-                            "function": {
-                                "name": "control_music",
-                                "arguments": json.dumps(parsed_args)
-                            }
-                        }]
-                        accumulated_content = ""  # Clear the text since we're executing the tool
+                # Pattern 2: "I'll play X" or "Playing X" or "Now playing X" (LLM responded conversationally)
+                if not parsed_args:
+                    play_patterns = [
+                        r"(?:i'll|i will|let me|going to|now)\s+play(?:ing)?\s+(.+?)(?:\s+(?:for you|in the|on the|now)|\.|$)",
+                        r"playing\s+(.+?)(?:\s+(?:for you|in the|on the|now)|\.|$)",
+                        r"(?:putting on|starting)\s+(.+?)(?:\s+(?:for you|in the|on the|now)|\.|$)",
+                    ]
+                    for pattern in play_patterns:
+                        match = re.search(pattern, content_lower)
+                        if match:
+                            query = match.group(1).strip()
+                            if query and len(query) > 1:
+                                _LOGGER.warning("=== FALLBACK DETECTED === LLM said '%s', extracting music request: '%s'", accumulated_content[:100], query)
+                                parsed_args = {"action": "play", "query": query}
+                                break
+
+                if parsed_args:
+                    _LOGGER.warning("Parsed text tool call: control_music(%s)", parsed_args)
+                    valid_tool_calls = [{
+                        "id": "text_parsed_1",
+                        "type": "function",
+                        "function": {
+                            "name": "control_music",
+                            "arguments": json.dumps(parsed_args)
+                        }
+                    }]
+                    accumulated_content = ""  # Clear the text since we're executing the tool
 
             if valid_tool_calls:
                 _LOGGER.info("Processing %d tool call(s)", len(valid_tool_calls))
