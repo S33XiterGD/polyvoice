@@ -1358,7 +1358,9 @@ class LMStudioConversationEntity(ConversationEntity):
             valid_tool_calls = unique_tool_calls
 
             # FALLBACK: Parse tool calls from text (for models like Qwen that output as text)
-            if not valid_tool_calls and accumulated_content:
+            # Skip if we already called control_music this session (any variant)
+            already_called_music = any(k.startswith("control_music:") for k in called_tools)
+            if not valid_tool_calls and accumulated_content and not already_called_music:
                 import re
                 content_lower = accumulated_content.lower()
                 parsed_args = None
@@ -1395,16 +1397,22 @@ class LMStudioConversationEntity(ConversationEntity):
                                 break
 
                 if parsed_args:
-                    _LOGGER.warning("Parsed text tool call: control_music(%s)", parsed_args)
-                    valid_tool_calls = [{
-                        "id": "text_parsed_1",
-                        "type": "function",
-                        "function": {
-                            "name": "control_music",
-                            "arguments": json.dumps(parsed_args)
-                        }
-                    }]
-                    accumulated_content = ""  # Clear the text since we're executing the tool
+                    # Check if we already called control_music (prevent duplicates)
+                    tool_key = f"control_music:{json.dumps(parsed_args, sort_keys=True)}"
+                    if tool_key not in called_tools:
+                        called_tools.add(tool_key)
+                        _LOGGER.warning("Parsed text tool call: control_music(%s)", parsed_args)
+                        valid_tool_calls = [{
+                            "id": "text_parsed_1",
+                            "type": "function",
+                            "function": {
+                                "name": "control_music",
+                                "arguments": json.dumps(parsed_args)
+                            }
+                        }]
+                        accumulated_content = ""  # Clear the text since we're executing the tool
+                    else:
+                        _LOGGER.debug("Skipping duplicate fallback tool call: control_music")
 
             if valid_tool_calls:
                 _LOGGER.info("Processing %d tool call(s)", len(valid_tool_calls))
@@ -1435,15 +1443,22 @@ class LMStudioConversationEntity(ConversationEntity):
                     if isinstance(result, Exception):
                         _LOGGER.error("Tool %s failed: %s", tool_call["function"]["name"], result)
                         result = {"error": str(result)}
-                    
+
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call["id"],
                         "content": json.dumps(result),
                     })
-                    
+
                     _LOGGER.debug("Tool %s returned: %s", tool_call["function"]["name"], result)
-                
+
+                    # For control_music, return immediately with the message (don't loop back to LLM)
+                    if tool_call["function"]["name"] == "control_music" and isinstance(result, dict):
+                        if "message" in result:
+                            return result["message"]
+                        elif "error" in result:
+                            return result["error"]
+
                 continue
             
             if accumulated_content:
