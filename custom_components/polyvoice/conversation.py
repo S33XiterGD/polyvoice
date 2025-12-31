@@ -23,7 +23,7 @@ from homeassistant.components.camera import async_get_image
 from homeassistant.helpers import intent, entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.util import ulid
+from homeassistant.util import ulid, dt as dt_util
 
 from .const import (
     DOMAIN,
@@ -1767,7 +1767,7 @@ class LMStudioConversationEntity(ConversationEntity):
             query_type = arguments.get("query_type", "upcoming").lower()
             
             try:
-                now = datetime.now(self.hass.config.time_zone_object)
+                now = datetime.now(dt_util.get_time_zone(self.hass.config.time_zone))
                 
                 # Determine time range based on query type
                 if query_type == "today":
@@ -1863,8 +1863,8 @@ class LMStudioConversationEntity(ConversationEntity):
                             "get_events",
                             {
                                 "entity_id": cal_entity,
-                                "start_date_time": start_time.strftime("%Y-%m-%d %H:%M:%S"),
-                                "end_date_time": end_time.strftime("%Y-%m-%d %H:%M:%S"),
+                                "start_date_time": start_time.isoformat(),
+                                "end_date_time": end_time.isoformat(),
                             },
                             blocking=True,
                             return_response=True,
@@ -1883,12 +1883,12 @@ class LMStudioConversationEntity(ConversationEntity):
                                 try:
                                     if "T" in str(event_start):
                                         event_dt = datetime.fromisoformat(str(event_start).replace("Z", "+00:00"))
-                                        event_dt = event_dt.astimezone(self.hass.config.time_zone_object)
+                                        event_dt = event_dt.astimezone(dt_util.get_time_zone(self.hass.config.time_zone))
                                         time_str = event_dt.strftime("%B %d at %I:%M %p")
                                         sort_key = event_dt
                                     else:
                                         event_dt = datetime.strptime(str(event_start), "%Y-%m-%d")
-                                        event_dt = event_dt.replace(tzinfo=self.hass.config.time_zone_object)
+                                        event_dt = event_dt.replace(tzinfo=dt_util.get_time_zone(self.hass.config.time_zone))
                                         time_str = event_dt.strftime("%B %d") + " (all day)"
                                         sort_key = event_dt
                                 except Exception as parse_err:
@@ -1962,75 +1962,38 @@ class LMStudioConversationEntity(ConversationEntity):
                 headers = {"User-Agent": "HomeAssistant-PolyVoice/1.0"}
                 team_key = team_name.lower().strip()
 
-                # Search for team across major leagues using ESPN search API
-                search_url = f"https://site.api.espn.com/apis/site/v2/sports/search?query={urllib.parse.quote(team_name)}&limit=5"
-                async with self._session.get(search_url, headers=headers) as resp:
-                    if resp.status == 200:
-                        search_data = await resp.json()
-                        results = search_data.get("results", [])
+                # Search for team in major US leagues directly (search API is deprecated)
+                leagues_to_try = [
+                    ("basketball", "nba"),
+                    ("football", "nfl"),
+                    ("baseball", "mlb"),
+                    ("hockey", "nhl"),
+                ]
 
-                        # Find first team result
-                        team_result = None
-                        for result in results:
-                            if result.get("type") == "team":
-                                team_result = result
-                                break
-
-                        if team_result:
-                            # Extract team info from search result
-                            team_id = team_result.get("id", "")
-                            full_name = team_result.get("displayName", team_name)
-                            # Parse the link to get sport/league info
-                            link = team_result.get("link", "")
-
-                            # Try to construct schedule URL from the link
-                            # Link format example: /nba/team/_/id/14/miami-heat
-                            if "/nba/" in link:
-                                url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/{team_id}/schedule"
-                            elif "/nfl/" in link:
-                                url = f"https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/{team_id}/schedule"
-                            elif "/mlb/" in link:
-                                url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/teams/{team_id}/schedule"
-                            elif "/nhl/" in link:
-                                url = f"https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/teams/{team_id}/schedule"
-                            elif "/soccer/" in link:
-                                # Try to extract league from link
-                                url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/usa.1/teams/{team_id}/schedule"
-                            else:
-                                return {"error": f"Unsupported sport for team '{team_name}'"}
-                        else:
-                            # Fallback: try direct search in major US leagues
-                            leagues_to_try = [
-                                ("basketball", "nba"),
-                                ("football", "nfl"),
-                                ("baseball", "mlb"),
-                                ("hockey", "nhl"),
-                            ]
-
-                            team_found = False
-                            for sport, league in leagues_to_try:
-                                teams_url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams"
-                                async with self._session.get(teams_url, headers=headers) as teams_resp:
-                                    if teams_resp.status == 200:
-                                        teams_data = await teams_resp.json()
-                                        for team in teams_data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", []):
-                                            t = team.get("team", {})
-                                            if (team_key in t.get("displayName", "").lower() or
-                                                team_key in t.get("shortDisplayName", "").lower() or
-                                                team_key in t.get("nickname", "").lower() or
-                                                team_key == t.get("abbreviation", "").lower()):
-                                                team_id = t.get("id", "")
-                                                full_name = t.get("displayName", team_name)
-                                                url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams/{team_id}/schedule"
-                                                team_found = True
-                                                break
-                                if team_found:
+                team_found = False
+                url = None
+                full_name = team_name
+                for sport, league in leagues_to_try:
+                    teams_url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams"
+                    async with self._session.get(teams_url, headers=headers) as teams_resp:
+                        if teams_resp.status == 200:
+                            teams_data = await teams_resp.json()
+                            for team in teams_data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", []):
+                                t = team.get("team", {})
+                                if (team_key in t.get("displayName", "").lower() or
+                                    team_key in t.get("shortDisplayName", "").lower() or
+                                    team_key in t.get("nickname", "").lower() or
+                                    team_key == t.get("abbreviation", "").lower()):
+                                    team_id = t.get("id", "")
+                                    full_name = t.get("displayName", team_name)
+                                    url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams/{team_id}/schedule"
+                                    team_found = True
                                     break
+                    if team_found:
+                        break
 
-                            if not team_found:
-                                return {"error": f"Team '{team_name}' not found. Try the full team name (e.g., 'Miami Heat', 'New York Yankees')"}
-                    else:
-                        return {"error": f"ESPN search failed: {resp.status}"}
+                if not team_found:
+                    return {"error": f"Team '{team_name}' not found. Try the full team name (e.g., 'Miami Heat', 'New York Yankees')"}
                 
                 async with self._session.get(url, headers=headers) as resp:
                     if resp.status != 200:
@@ -2106,7 +2069,7 @@ class LMStudioConversationEntity(ConversationEntity):
                             from zoneinfo import ZoneInfo
                             game_dt = datetime.fromisoformat(game_date_str.replace("Z", "+00:00"))
                             # Convert to HA configured timezone
-                            game_dt_local = game_dt.astimezone(self.hass.config.time_zone_object)
+                            game_dt_local = game_dt.astimezone(dt_util.get_time_zone(self.hass.config.time_zone))
                             formatted_date = game_dt_local.strftime("%A, %B %d at %I:%M %p")
                         except (ValueError, KeyError, TypeError, AttributeError):
                             formatted_date = game_date_str[:10]
@@ -2257,7 +2220,7 @@ class LMStudioConversationEntity(ConversationEntity):
                                     try:
                                         # TheNewsAPI format: 2025-12-18T15:32:20.000000Z
                                         dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
-                                        dt_local = dt.astimezone(self.hass.config.time_zone_object)
+                                        dt_local = dt.astimezone(dt_util.get_time_zone(self.hass.config.time_zone))
                                         date_text = dt_local.strftime("%B %d at %I:%M %p")
                                     except (ValueError, KeyError, TypeError, AttributeError):
                                         date_text = published_at
@@ -2403,7 +2366,7 @@ class LMStudioConversationEntity(ConversationEntity):
                                     game_date = event.get("date", "")
                                     try:
                                         game_dt = datetime.fromisoformat(game_date.replace("Z", "+00:00"))
-                                        game_local = game_dt.astimezone(self.hass.config.time_zone_object)
+                                        game_local = game_dt.astimezone(dt_util.get_time_zone(self.hass.config.time_zone))
                                         game_time = game_local.strftime("%B %d at %I:%M %p")
                                         game_date_short = game_local.strftime("%m/%d")
                                     except (ValueError, KeyError, TypeError, AttributeError):
@@ -2681,13 +2644,13 @@ class LMStudioConversationEntity(ConversationEntity):
                 friendly_name = get_friendly_name(entity_id, current_state)
                 
                 # Determine time range using HA configured timezone
-                now = datetime.now(self.hass.config.time_zone_object)
+                now = datetime.now(dt_util.get_time_zone(self.hass.config.time_zone))
 
                 if specific_date:
                     # Query specific date
                     try:
                         target_date = datetime.strptime(specific_date, "%Y-%m-%d")
-                        tz = self.hass.config.time_zone_object
+                        tz = dt_util.get_time_zone(self.hass.config.time_zone)
                         start_time = target_date.replace(hour=0, minute=0, second=0, tzinfo=tz)
                         end_time = target_date.replace(hour=23, minute=59, second=59, tzinfo=tz)
                         period_desc = target_date.strftime("%B %d, %Y")
@@ -2759,7 +2722,7 @@ class LMStudioConversationEntity(ConversationEntity):
                             continue
                         
                         try:
-                            state_time = state.last_changed.astimezone(self.hass.config.time_zone_object)
+                            state_time = state.last_changed.astimezone(dt_util.get_time_zone(self.hass.config.time_zone))
                             time_str = state_time.strftime("%B %d at %I:%M %p")
                             
                             if state.state == on_state:
