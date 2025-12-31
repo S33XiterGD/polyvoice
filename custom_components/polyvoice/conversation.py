@@ -3024,12 +3024,19 @@ class LMStudioConversationEntity(ConversationEntity):
             players = self.room_player_mapping  # {room: entity_id}
             all_players = list(players.values())
 
+            if not all_players:
+                _LOGGER.error("No players configured in room_player_mapping!")
+                return {"error": "No music players configured. Add room:player mappings in PolyVoice settings."}
+
             # Helper: find currently playing/paused player
             def find_active_player():
+                _LOGGER.info("Looking for active player in: %s", all_players)
                 for pid in all_players:
                     state = self.hass.states.get(pid)
-                    if state and state.state in ("playing", "paused"):
-                        return pid
+                    if state:
+                        _LOGGER.info("Player %s state: %s", pid, state.state)
+                        if state.state in ("playing", "paused", "buffering", "on"):
+                            return pid
                 return None
 
             # Helper: get room name from entity_id
@@ -3040,7 +3047,7 @@ class LMStudioConversationEntity(ConversationEntity):
                 return "unknown"
 
             try:
-                _LOGGER.info("Music: action=%s, query=%s, room=%s, shuffle=%s", action, query, room, shuffle)
+                _LOGGER.info("Music: action=%s, query=%s, room=%s, shuffle=%s, players=%s", action, query, room, shuffle, all_players)
 
                 # Determine target player(s)
                 if room == "everywhere":
@@ -3147,14 +3154,19 @@ class LMStudioConversationEntity(ConversationEntity):
 
                 elif action == "transfer":
                     active = find_active_player()
+                    _LOGGER.info("Transfer: active=%s, target_players=%s", active, target_players)
                     if not active:
                         return {"error": "No music playing to transfer"}
                     if not target_players:
                         return {"error": "No target room specified"}
 
                     target = target_players[0]
+                    _LOGGER.info("Transferring from %s to %s", active, target)
+
+                    # Transfer queue from source to target
                     await self.hass.services.async_call(
                         "music_assistant", "transfer_queue",
+                        {"source_player": active},
                         target={"entity_id": target},
                         blocking=True
                     )
