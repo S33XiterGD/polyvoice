@@ -236,6 +236,7 @@ DEFAULT_EXCLUDED_INTENTS: Final = [
     "HassMediaPrevious",
     "HassMediaPlay",
     "HassPlayMedia",
+    "HassMediaSearchAndPlay",  # "play X in room" pattern
     "HassMediaShuffle",
     "HassMediaRepeat",
     "HassMediaStop",
