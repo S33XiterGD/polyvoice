@@ -920,16 +920,49 @@ class LMStudioConversationEntity(ConversationEntity):
         self, text: str, language: str, conversation_id: str
     ) -> conversation.ConversationResult | None:
         """Handle simple music commands instantly - context aware via helper."""
+        import re
 
-        # Get target from helper (last active speaker)
-        helper = self.last_active_speaker or "input_text.current_music_player"
-        state = self.hass.states.get(helper)
+        _LOGGER.warning("=== SIMPLE MUSIC CHECK === text='%s'", text)
+
+        # Check if this is a simple music command
+        is_skip = text.startswith('skip') or text.startswith('next')
+        is_previous = text.startswith('previous') or text.startswith('prev') or text == 'go back'
+        is_pause = text.startswith('pause')
+        is_resume = text.startswith('resume') or text.startswith('continue') or text == 'unpause'
+        is_stop = text.startswith('stop')
+
+        if not (is_skip or is_previous or is_pause or is_resume or is_stop):
+            return None
+
+        _LOGGER.warning("=== SIMPLE MUSIC MATCHED === type=%s",
+                       'skip' if is_skip else 'previous' if is_previous else 'pause' if is_pause else 'resume' if is_resume else 'stop')
+
+        # Extract room if specified (e.g., "skip in kitchen", "pause the living room")
+        room = None
+        room_match = re.search(r'(?:in|on|the)\s+(?:the\s+)?(\w+(?:\s+\w+)?)\s*$', text)
+        if room_match:
+            room = room_match.group(1).strip()
+            _LOGGER.warning("=== SIMPLE MUSIC === Extracted room: '%s'", room)
+
+        # Get target player
         target = None
 
+        # If room specified, use room mapping
+        if room and self.room_player_mapping:
+            room_lower = room.lower()
+            for rname, player in self.room_player_mapping.items():
+                if room_lower in rname.lower() or rname.lower() in room_lower:
+                    target = player
+                    _LOGGER.warning("=== SIMPLE MUSIC === Room '%s' -> player: %s", room, target)
+                    break
+
         # Priority 1: Helper (last active speaker)
-        if state and state.state and state.state.startswith("media_player."):
-            target = state.state
-            _LOGGER.warning("=== SIMPLE MUSIC === Using helper: %s", target)
+        if not target:
+            helper = self.last_active_speaker or "input_text.current_music_player"
+            state = self.hass.states.get(helper)
+            if state and state.state and state.state.startswith("media_player."):
+                target = state.state
+                _LOGGER.warning("=== SIMPLE MUSIC === Using helper: %s", target)
 
         # Priority 2: Currently playing player
         if not target and self.music_players:
@@ -947,6 +980,7 @@ class LMStudioConversationEntity(ConversationEntity):
                 _LOGGER.warning("=== SIMPLE MUSIC === Using default: %s", target)
 
         if not target:
+            _LOGGER.warning("=== SIMPLE MUSIC === No target found!")
             return None
 
         def respond(msg: str) -> conversation.ConversationResult:
@@ -954,37 +988,32 @@ class LMStudioConversationEntity(ConversationEntity):
             resp.async_set_speech(msg)
             return conversation.ConversationResult(response=resp, conversation_id=conversation_id)
 
-        # SKIP / NEXT
-        if text in ['skip', 'next', 'next track', 'next song', 'skip this', 'skip song']:
-            _LOGGER.warning("=== SKIP === target=%s", target)
+        # Execute the action
+        if is_skip:
+            _LOGGER.warning("=== SKIP EXECUTING === target=%s", target)
             await self.hass.services.async_call("media_player", "media_next_track", {"entity_id": target}, blocking=True)
             return respond("Skipped")
 
-        # PREVIOUS
-        if text in ['previous', 'prev', 'previous track', 'previous song', 'go back', 'last song']:
-            _LOGGER.warning("=== PREVIOUS === target=%s", target)
+        if is_previous:
+            _LOGGER.warning("=== PREVIOUS EXECUTING === target=%s", target)
             await self.hass.services.async_call("media_player", "media_previous_track", {"entity_id": target}, blocking=True)
             return respond("Previous")
 
-        # PAUSE
-        if text in ['pause', 'pause music', 'pause the music']:
-            _LOGGER.warning("=== PAUSE === target=%s", target)
+        if is_pause:
+            _LOGGER.warning("=== PAUSE EXECUTING === target=%s", target)
             await self.hass.services.async_call("media_player", "media_pause", {"entity_id": target}, blocking=True)
             return respond("Paused")
 
-        # RESUME
-        if text in ['resume', 'resume music', 'continue', 'unpause']:
-            _LOGGER.warning("=== RESUME === target=%s", target)
+        if is_resume:
+            _LOGGER.warning("=== RESUME EXECUTING === target=%s", target)
             await self.hass.services.async_call("media_player", "media_play", {"entity_id": target}, blocking=True)
             return respond("Resumed")
 
-        # STOP
-        if text in ['stop', 'stop music', 'stop the music', 'stop playing']:
-            _LOGGER.warning("=== STOP === target=%s", target)
+        if is_stop:
+            _LOGGER.warning("=== STOP EXECUTING === target=%s", target)
             await self.hass.services.async_call("media_player", "media_stop", {"entity_id": target}, blocking=True)
             return respond("Stopped")
 
-        # Not a simple command - let LLM handle it
         return None
 
     async def async_process(
