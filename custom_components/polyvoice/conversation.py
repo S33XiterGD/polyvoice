@@ -485,14 +485,16 @@ class LMStudioConversationEntity(ConversationEntity):
         else:
             self.llm_api_ids = [DEFAULT_LLM_HASS_API]
         
-        self.excluded_intents = set(config.get(CONF_EXCLUDED_INTENTS, DEFAULT_EXCLUDED_INTENTS))
+        # ALWAYS use default excluded intents (hardcoded) - UI can only ADD more, not remove
+        self.excluded_intents = set(DEFAULT_EXCLUDED_INTENTS)
 
+        # Add any custom excluded intents from UI config
         custom_excluded = config.get(CONF_CUSTOM_EXCLUDED_INTENTS, DEFAULT_CUSTOM_EXCLUDED_INTENTS)
         if custom_excluded:
             custom_list = [i.strip() for i in custom_excluded.split(",") if i.strip()]
             self.excluded_intents.update(custom_list)
 
-        _LOGGER.warning("=== EXCLUDED INTENTS === %s", self.excluded_intents)
+        _LOGGER.warning("=== EXCLUDED INTENTS (hardcoded + custom) === %s", self.excluded_intents)
 
         self.system_prompt = config.get(CONF_SYSTEM_PROMPT, DEFAULT_SYSTEM_PROMPT)
         
