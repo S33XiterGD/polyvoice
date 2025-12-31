@@ -23,7 +23,7 @@ from homeassistant.components.camera import async_get_image
 from homeassistant.helpers import intent, entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.util import ulid
+from homeassistant.util import ulid, dt as dt_util
 
 from .const import (
     DOMAIN,
@@ -1767,7 +1767,7 @@ class LMStudioConversationEntity(ConversationEntity):
             query_type = arguments.get("query_type", "upcoming").lower()
             
             try:
-                now = datetime.now(self.hass.config.time_zone_object)
+                now = datetime.now(dt_util.get_time_zone(self.hass.config.time_zone))
                 
                 # Determine time range based on query type
                 if query_type == "today":
@@ -1883,12 +1883,12 @@ class LMStudioConversationEntity(ConversationEntity):
                                 try:
                                     if "T" in str(event_start):
                                         event_dt = datetime.fromisoformat(str(event_start).replace("Z", "+00:00"))
-                                        event_dt = event_dt.astimezone(self.hass.config.time_zone_object)
+                                        event_dt = event_dt.astimezone(dt_util.get_time_zone(self.hass.config.time_zone))
                                         time_str = event_dt.strftime("%B %d at %I:%M %p")
                                         sort_key = event_dt
                                     else:
                                         event_dt = datetime.strptime(str(event_start), "%Y-%m-%d")
-                                        event_dt = event_dt.replace(tzinfo=self.hass.config.time_zone_object)
+                                        event_dt = event_dt.replace(tzinfo=dt_util.get_time_zone(self.hass.config.time_zone))
                                         time_str = event_dt.strftime("%B %d") + " (all day)"
                                         sort_key = event_dt
                                 except Exception as parse_err:
@@ -2069,7 +2069,7 @@ class LMStudioConversationEntity(ConversationEntity):
                             from zoneinfo import ZoneInfo
                             game_dt = datetime.fromisoformat(game_date_str.replace("Z", "+00:00"))
                             # Convert to HA configured timezone
-                            game_dt_local = game_dt.astimezone(self.hass.config.time_zone_object)
+                            game_dt_local = game_dt.astimezone(dt_util.get_time_zone(self.hass.config.time_zone))
                             formatted_date = game_dt_local.strftime("%A, %B %d at %I:%M %p")
                         except (ValueError, KeyError, TypeError, AttributeError):
                             formatted_date = game_date_str[:10]
@@ -2220,7 +2220,7 @@ class LMStudioConversationEntity(ConversationEntity):
                                     try:
                                         # TheNewsAPI format: 2025-12-18T15:32:20.000000Z
                                         dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
-                                        dt_local = dt.astimezone(self.hass.config.time_zone_object)
+                                        dt_local = dt.astimezone(dt_util.get_time_zone(self.hass.config.time_zone))
                                         date_text = dt_local.strftime("%B %d at %I:%M %p")
                                     except (ValueError, KeyError, TypeError, AttributeError):
                                         date_text = published_at
@@ -2366,7 +2366,7 @@ class LMStudioConversationEntity(ConversationEntity):
                                     game_date = event.get("date", "")
                                     try:
                                         game_dt = datetime.fromisoformat(game_date.replace("Z", "+00:00"))
-                                        game_local = game_dt.astimezone(self.hass.config.time_zone_object)
+                                        game_local = game_dt.astimezone(dt_util.get_time_zone(self.hass.config.time_zone))
                                         game_time = game_local.strftime("%B %d at %I:%M %p")
                                         game_date_short = game_local.strftime("%m/%d")
                                     except (ValueError, KeyError, TypeError, AttributeError):
@@ -2644,13 +2644,13 @@ class LMStudioConversationEntity(ConversationEntity):
                 friendly_name = get_friendly_name(entity_id, current_state)
                 
                 # Determine time range using HA configured timezone
-                now = datetime.now(self.hass.config.time_zone_object)
+                now = datetime.now(dt_util.get_time_zone(self.hass.config.time_zone))
 
                 if specific_date:
                     # Query specific date
                     try:
                         target_date = datetime.strptime(specific_date, "%Y-%m-%d")
-                        tz = self.hass.config.time_zone_object
+                        tz = dt_util.get_time_zone(self.hass.config.time_zone)
                         start_time = target_date.replace(hour=0, minute=0, second=0, tzinfo=tz)
                         end_time = target_date.replace(hour=23, minute=59, second=59, tzinfo=tz)
                         period_desc = target_date.strftime("%B %d, %Y")
@@ -2722,7 +2722,7 @@ class LMStudioConversationEntity(ConversationEntity):
                             continue
                         
                         try:
-                            state_time = state.last_changed.astimezone(self.hass.config.time_zone_object)
+                            state_time = state.last_changed.astimezone(dt_util.get_time_zone(self.hass.config.time_zone))
                             time_str = state_time.strftime("%B %d at %I:%M %p")
                             
                             if state.state == on_state:
