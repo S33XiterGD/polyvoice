@@ -561,7 +561,6 @@ class LMStudioConversationEntity(ConversationEntity):
             "Config updated - Provider: %s, Model: %s, Assist: %s, Tools: %d",
             self.provider, self.model, self.enable_assist, len(self._tools)
         )
-        _LOGGER.info("Excluded intents: %s", self.excluded_intents)
 
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
