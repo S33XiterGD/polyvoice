@@ -1356,7 +1356,38 @@ class LMStudioConversationEntity(ConversationEntity):
                     _LOGGER.debug("Skipping duplicate tool call: %s", tc['function']['name'])
             
             valid_tool_calls = unique_tool_calls
-            
+
+            # FALLBACK: Parse tool calls from text (for models like Qwen that output as text)
+            if not valid_tool_calls and accumulated_content:
+                # Check for control_music pattern in text
+                import re
+                tool_match = re.search(r'control_music\s*\(\s*([^)]+)\s*\)', accumulated_content)
+                if tool_match:
+                    _LOGGER.warning("Detected text-based tool call, parsing: %s", tool_match.group(0))
+                    args_str = tool_match.group(1)
+                    # Parse key=value pairs
+                    parsed_args = {}
+                    for match in re.finditer(r'(\w+)\s*=\s*["\']?([^"\'",\)]+)["\']?', args_str):
+                        key, val = match.group(1), match.group(2).strip()
+                        if val.lower() == 'true':
+                            parsed_args[key] = True
+                        elif val.lower() == 'false':
+                            parsed_args[key] = False
+                        else:
+                            parsed_args[key] = val
+
+                    if parsed_args:
+                        _LOGGER.warning("Parsed text tool call: control_music(%s)", parsed_args)
+                        valid_tool_calls = [{
+                            "id": "text_parsed_1",
+                            "type": "function",
+                            "function": {
+                                "name": "control_music",
+                                "arguments": json.dumps(parsed_args)
+                            }
+                        }]
+                        accumulated_content = ""  # Clear the text since we're executing the tool
+
             if valid_tool_calls:
                 _LOGGER.info("Processing %d tool call(s)", len(valid_tool_calls))
                 
