@@ -980,6 +980,10 @@ class LMStudioConversationEntity(ConversationEntity):
         self, query: str, language: str
     ) -> conversation.ConversationResult | None:
         """Handle simple music commands locally without LLM. Returns None if not a simple command."""
+        # Strip punctuation for matching
+        import string
+        query_clean = query.translate(str.maketrans('', '', string.punctuation)).strip()
+
         # Map simple commands to actions
         simple_commands = {
             "skip": "skip", "next": "skip", "skip track": "skip", "next track": "skip",
@@ -992,11 +996,11 @@ class LMStudioConversationEntity(ConversationEntity):
             "go back": "previous", "last track": "previous", "last song": "previous",
         }
 
-        action = simple_commands.get(query)
+        action = simple_commands.get(query_clean)
         if not action:
             return None  # Not a simple command, let LLM handle it
 
-        _LOGGER.warning("=== LOCAL MUSIC HANDLER === query='%s' action='%s'", query, action)
+        _LOGGER.warning("=== LOCAL MUSIC === query='%s' -> action='%s'", query_clean, action)
 
         # Find the active player
         target_player = None
@@ -1006,8 +1010,13 @@ class LMStudioConversationEntity(ConversationEntity):
         room_to_player = dict(self.room_player_mapping)
         all_known_players = set(all_players) | set(room_to_player.values())
 
+        _LOGGER.warning("=== PLAYERS === music_players=%s, room_mapping=%s, all=%s",
+                       all_players, room_to_player, all_known_players)
+
         for player in all_known_players:
             state = self.hass.states.get(player)
+            player_state = state.state if state else "None"
+            _LOGGER.warning("=== CHECK === %s state=%s", player, player_state)
             if state and state.state == "playing":
                 target_player = player
                 _LOGGER.warning("=== FOUND PLAYING === %s", player)
