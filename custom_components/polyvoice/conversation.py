@@ -3122,27 +3122,39 @@ class LMStudioConversationEntity(ConversationEntity):
                     if not target_players:
                         return {"error": f"Unknown room: {room}. Available: {', '.join(players.keys())}"}
 
-                    # For "everywhere" mode, play on all speakers simultaneously
+                    # For "everywhere" mode, create sync group then play
                     if is_everywhere and len(target_players) > 1:
-                        _LOGGER.info("PARTY MODE: Playing on %d speakers: %s", len(target_players), target_players)
-                        # Play on ALL speakers at once by targeting multiple entities
+                        _LOGGER.info("PARTY MODE: Syncing %d speakers: %s", len(target_players), target_players)
+                        primary = target_players[0]
+                        others = target_players[1:]
+
+                        # First, join all speakers into a sync group with the primary
+                        await self.hass.services.async_call(
+                            "media_player", "join",
+                            {"group_members": others},
+                            target={"entity_id": primary},
+                            blocking=True
+                        )
+                        _LOGGER.info("Speakers synced to %s, now playing...", primary)
+
+                        # Now play on the primary (synced group will follow)
                         await self.hass.services.async_call(
                             "music_assistant", "play_media",
                             {"media_id": query, "media_type": media_type, "enqueue": "replace"},
-                            target={"entity_id": target_players},
+                            target={"entity_id": primary},
                             blocking=True
                         )
                         if shuffle or media_type == "genre":
                             await self.hass.services.async_call(
                                 "media_player", "shuffle_set",
                                 {"shuffle": True},
-                                target={"entity_id": target_players},
+                                target={"entity_id": primary},
                                 blocking=True
                             )
                         room_names = [get_room_name(p) for p in target_players]
                         return {
                             "status": "playing_everywhere",
-                            "message": f"Now playing {query} on {len(target_players)} speakers: {', '.join(room_names)}. Let's go!"
+                            "message": f"Now playing {query} synced on {len(target_players)} speakers: {', '.join(room_names)}. Party time!"
                         }
                     else:
                         # Single room playback
