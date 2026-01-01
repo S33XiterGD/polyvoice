@@ -933,7 +933,7 @@ class LMStudioConversationEntity(ConversationEntity):
                 "type": "function",
                 "function": {
                     "name": "control_music",
-                    "description": f"Control music playback via Music Assistant. Rooms: {rooms_list}, everywhere. Actions: play, pause, resume, stop, skip_next, skip_previous, what_playing, transfer.",
+                    "description": f"Control music playback via Music Assistant. Rooms: {rooms_list}. Actions: play, pause, resume, stop, skip_next, skip_previous, what_playing, transfer.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -943,7 +943,7 @@ class LMStudioConversationEntity(ConversationEntity):
                                 "description": "The music action to perform"
                             },
                             "query": {"type": "string", "description": "What to play (artist, album, track, playlist, or genre)"},
-                            "room": {"type": "string", "description": f"Target room ({rooms_list}, or 'everywhere')"},
+                            "room": {"type": "string", "description": f"Target room: {rooms_list}"},
                             "media_type": {
                                 "type": "string",
                                 "enum": ["artist", "album", "track", "playlist", "genre"],
@@ -3093,9 +3093,7 @@ class LMStudioConversationEntity(ConversationEntity):
                 _LOGGER.info("=== MUSIC: %s ===", action.upper())
 
                 # Determine target player(s) for play action
-                if room == "everywhere":
-                    target_players = all_players
-                elif room in players:
+                if room in players:
                     target_players = [players[room]]
                 elif room:
                     # Fuzzy match room name
@@ -3135,8 +3133,7 @@ class LMStudioConversationEntity(ConversationEntity):
                             {"entity_id": self.last_active_speaker, "value": target_players[0]}
                         )
 
-                    room_text = "everywhere" if room == "everywhere" else f"in the {room}"
-                    return {"status": "playing", "message": f"Playing {query} {room_text}"}
+                    return {"status": "playing", "message": f"Playing {query} in the {room}"}
 
                 elif action == "pause":
                     # Find the player that's currently PLAYING and pause it
