@@ -928,12 +928,13 @@ class LMStudioConversationEntity(ConversationEntity):
         _LOGGER.info("Music check: enable_music=%s, room_player_mapping=%s", self.enable_music, self.room_player_mapping)
         if self.enable_music and self.room_player_mapping:
             rooms_list = ", ".join(self.room_player_mapping.keys())
+            num_rooms = len(self.room_player_mapping)
             _LOGGER.info("MUSIC TOOL ENABLED with rooms: %s", rooms_list)
             tools.append({
                 "type": "function",
                 "function": {
                     "name": "control_music",
-                    "description": f"Control music playback via Music Assistant. Rooms: {rooms_list}, everywhere. Actions: play, pause, resume, stop, skip_next, skip_previous, what_playing, transfer.",
+                    "description": f"Control music playback via Music Assistant. Rooms: {rooms_list}. Use 'everywhere' to play on ALL {num_rooms} speakers at once (whole house party mode). Actions: play, pause, resume, stop, skip_next, skip_previous, what_playing, transfer.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -943,7 +944,7 @@ class LMStudioConversationEntity(ConversationEntity):
                                 "description": "The music action to perform"
                             },
                             "query": {"type": "string", "description": "What to play (artist, album, track, playlist, or genre)"},
-                            "room": {"type": "string", "description": f"Target room ({rooms_list}, or 'everywhere')"},
+                            "room": {"type": "string", "description": f"Target room ({rooms_list}), OR 'everywhere'/'whole house'/'all rooms' for synchronized multi-room playback on all {num_rooms} speakers"},
                             "media_type": {
                                 "type": "string",
                                 "enum": ["artist", "album", "track", "playlist", "genre"],
@@ -3092,9 +3093,16 @@ class LMStudioConversationEntity(ConversationEntity):
             try:
                 _LOGGER.info("=== MUSIC: %s ===", action.upper())
 
+                # Detect "everywhere" mode - catch all variations
+                everywhere_triggers = ["everywhere", "whole house", "all rooms", "all speakers",
+                                       "every room", "entire house", "house party", "party mode",
+                                       "all over", "throughout"]
+                is_everywhere = any(trigger in room for trigger in everywhere_triggers) if room else False
+
                 # Determine target player(s) for play action
-                if room == "everywhere":
+                if is_everywhere:
                     target_players = all_players
+                    _LOGGER.info("EVERYWHERE MODE: Playing on %d speakers", len(all_players))
                 elif room in players:
                     target_players = [players[room]]
                 elif room:
@@ -3114,19 +3122,51 @@ class LMStudioConversationEntity(ConversationEntity):
                     if not target_players:
                         return {"error": f"Unknown room: {room}. Available: {', '.join(players.keys())}"}
 
-                    for player in target_players:
+                    # For "everywhere" mode, play on all speakers simultaneously
+                    if is_everywhere and len(target_players) > 1:
+                        _LOGGER.info("Starting synchronized playback on %d speakers...", len(target_players))
+                        # Play on first speaker, then sync others to it
+                        primary = target_players[0]
                         await self.hass.services.async_call(
                             "music_assistant", "play_media",
                             {"media_id": query, "media_type": media_type, "enqueue": "replace"},
-                            target={"entity_id": player},
+                            target={"entity_id": primary},
                             blocking=True
                         )
                         if shuffle or media_type == "genre":
                             await self.hass.services.async_call(
                                 "media_player", "shuffle_set",
-                                {"entity_id": player, "shuffle": True},
+                                {"entity_id": primary, "shuffle": True},
                                 blocking=True
                             )
+                        # Transfer queue to all other speakers for sync
+                        for player in target_players[1:]:
+                            await self.hass.services.async_call(
+                                "music_assistant", "transfer_queue",
+                                {"source_player": primary, "auto_play": True},
+                                target={"entity_id": player},
+                                blocking=True
+                            )
+                        room_names = [get_room_name(p) for p in target_players]
+                        return {
+                            "status": "playing_everywhere",
+                            "message": f"Now playing {query} on {len(target_players)} speakers: {', '.join(room_names)}. Let's go!"
+                        }
+                    else:
+                        # Single room playback
+                        for player in target_players:
+                            await self.hass.services.async_call(
+                                "music_assistant", "play_media",
+                                {"media_id": query, "media_type": media_type, "enqueue": "replace"},
+                                target={"entity_id": player},
+                                blocking=True
+                            )
+                            if shuffle or media_type == "genre":
+                                await self.hass.services.async_call(
+                                    "media_player", "shuffle_set",
+                                    {"entity_id": player, "shuffle": True},
+                                    blocking=True
+                                )
 
                     # Track last active
                     if self.last_active_speaker and target_players:
@@ -3135,8 +3175,7 @@ class LMStudioConversationEntity(ConversationEntity):
                             {"entity_id": self.last_active_speaker, "value": target_players[0]}
                         )
 
-                    room_text = "everywhere" if room == "everywhere" else f"in the {room}"
-                    return {"status": "playing", "message": f"Playing {query} {room_text}"}
+                    return {"status": "playing", "message": f"Playing {query} in the {room}"}
 
                 elif action == "pause":
                     # Find the player that's currently PLAYING and pause it
