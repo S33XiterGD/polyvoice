@@ -3124,27 +3124,19 @@ class LMStudioConversationEntity(ConversationEntity):
 
                     # For "everywhere" mode, play on all speakers simultaneously
                     if is_everywhere and len(target_players) > 1:
-                        _LOGGER.info("Starting synchronized playback on %d speakers...", len(target_players))
-                        # Play on first speaker, then sync others to it
-                        primary = target_players[0]
+                        _LOGGER.info("PARTY MODE: Playing on %d speakers: %s", len(target_players), target_players)
+                        # Play on ALL speakers at once by targeting multiple entities
                         await self.hass.services.async_call(
                             "music_assistant", "play_media",
                             {"media_id": query, "media_type": media_type, "enqueue": "replace"},
-                            target={"entity_id": primary},
+                            target={"entity_id": target_players},
                             blocking=True
                         )
                         if shuffle or media_type == "genre":
                             await self.hass.services.async_call(
                                 "media_player", "shuffle_set",
-                                {"entity_id": primary, "shuffle": True},
-                                blocking=True
-                            )
-                        # Transfer queue to all other speakers for sync
-                        for player in target_players[1:]:
-                            await self.hass.services.async_call(
-                                "music_assistant", "transfer_queue",
-                                {"source_player": primary, "auto_play": True},
-                                target={"entity_id": player},
+                                {"shuffle": True},
+                                target={"entity_id": target_players},
                                 blocking=True
                             )
                         room_names = [get_room_name(p) for p in target_players]
