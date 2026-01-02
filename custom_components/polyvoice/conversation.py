@@ -2093,21 +2093,26 @@ class LMStudioConversationEntity(ConversationEntity):
                 
                 result = {"team": full_name}
                 
-                # Find last completed game and next upcoming game
+                # Find last completed game, live game, and next upcoming game
                 now = datetime.now()
                 last_game = None
                 next_game = None
-                
+                live_game = None
+
                 for event in events:
-                    status = event.get("competitions", [{}])[0].get("status", {}).get("type", {}).get("completed", False)
+                    status_info = event.get("competitions", [{}])[0].get("status", {}).get("type", {})
+                    is_completed = status_info.get("completed", False)
+                    status_name = status_info.get("name", "")
                     game_date_str = event.get("date", "")
-                    
+
                     if game_date_str:
                         try:
                             game_date = datetime.fromisoformat(game_date_str.replace("Z", "+00:00"))
                             game_date_naive = game_date.replace(tzinfo=None)
-                            
-                            if status:  # Completed game
+
+                            if status_name == "STATUS_IN_PROGRESS":  # Live game
+                                live_game = event
+                            elif is_completed:  # Completed game
                                 if last_game is None or game_date_naive > datetime.fromisoformat(last_game.get("date", "2000-01-01").replace("Z", "+00:00")).replace(tzinfo=None):
                                     last_game = event
                             else:  # Upcoming game
@@ -2138,7 +2143,31 @@ class LMStudioConversationEntity(ConversationEntity):
                         "away_score": away_score,
                         "summary": f"{away_name} {away_score} @ {home_name} {home_score}"
                     }
-                
+
+                # Format live game (takes priority - always shown if there's a game in progress)
+                if live_game:
+                    comp = live_game.get("competitions", [{}])[0]
+                    competitors = comp.get("competitors", [])
+                    home_team = next((c for c in competitors if c.get("homeAway") == "home"), {})
+                    away_team = next((c for c in competitors if c.get("homeAway") == "away"), {})
+
+                    home_name = home_team.get("team", {}).get("displayName", "Home")
+                    away_name = away_team.get("team", {}).get("displayName", "Away")
+                    home_score = home_team.get("score", "0")
+                    away_score = away_team.get("score", "0")
+
+                    # Get game clock/period info
+                    status_detail = comp.get("status", {}).get("type", {}).get("detail", "In Progress")
+
+                    result["live_game"] = {
+                        "home_team": home_name,
+                        "away_team": away_name,
+                        "home_score": home_score,
+                        "away_score": away_score,
+                        "status": status_detail,
+                        "summary": f"LIVE: {away_name} {away_score} @ {home_name} {home_score} ({status_detail})"
+                    }
+
                 # Format next game
                 if query_type in ["next_game", "both"] and next_game:
                     comp = next_game.get("competitions", [{}])[0]
