@@ -809,7 +809,21 @@ class LMStudioConversationEntity(ConversationEntity):
                     }
                 }
             })
-        
+            # UFC/MMA tool (event-based, not team-based)
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "get_ufc_info",
+                    "description": "Get UFC/MMA fight information. Use for: 'next UFC event', 'when is UFC', 'upcoming UFC fights', 'UFC schedule'.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query_type": {"type": "string", "enum": ["next_event", "upcoming"], "description": "What info to get: 'next_event' for the next UFC event, 'upcoming' for list of upcoming events"}
+                        }
+                    }
+                }
+            })
+
         # ===== NEWS (if enabled and API key available) =====
         if self.enable_news and self.newsapi_key:
             tools.append({
@@ -2043,6 +2057,7 @@ class LMStudioConversationEntity(ConversationEntity):
                     ("baseball", "mlb"),
                     ("hockey", "nhl"),
                     ("soccer", "eng.1"),  # Premier League
+                    ("soccer", "uefa.champions"),  # Champions League
                     ("football", "college-football"),  # NCAA Football
                     ("basketball", "mens-college-basketball"),  # NCAA Basketball
                 ]
@@ -2224,7 +2239,62 @@ class LMStudioConversationEntity(ConversationEntity):
             except Exception as err:
                 _LOGGER.error("Sports API error: %s", err, exc_info=True)
                 return {"error": f"Failed to get sports info: {str(err)}"}
-        
+
+        elif tool_name == "get_ufc_info":
+            # Get UFC/MMA event information from ESPN API
+            query_type = arguments.get("query_type", "next_event")
+
+            try:
+                self._track_api_call("sports")
+                headers = {"User-Agent": "HomeAssistant-PolyVoice/1.0"}
+
+                async with asyncio.timeout(API_TIMEOUT):
+                    events_url = "https://site.api.espn.com/apis/site/v2/sports/mma/ufc/scoreboard"
+                    async with self._session.get(events_url, headers=headers) as resp:
+                        if resp.status != 200:
+                            return {"error": f"ESPN UFC API error: {resp.status}"}
+                        data = await resp.json()
+
+                # Get upcoming events from calendar
+                leagues = data.get("leagues", [{}])
+                calendar = leagues[0].get("calendar", []) if leagues else []
+
+                if not calendar:
+                    return {"error": "No upcoming UFC events found"}
+
+                result = {"events": []}
+
+                for event in calendar[:5]:  # Get up to 5 upcoming events
+                    event_info = {
+                        "name": event.get("label", "Unknown Event"),
+                        "date": event.get("startDate", "")[:10] if event.get("startDate") else "TBD"
+                    }
+                    # Format date nicely
+                    if event_info["date"] and event_info["date"] != "TBD":
+                        try:
+                            from datetime import datetime
+                            event_dt = datetime.fromisoformat(event_info["date"])
+                            event_info["formatted_date"] = event_dt.strftime("%B %d, %Y")
+                        except:
+                            event_info["formatted_date"] = event_info["date"]
+                    result["events"].append(event_info)
+
+                if query_type == "next_event" and result["events"]:
+                    next_evt = result["events"][0]
+                    result["response_text"] = f"The next UFC event is {next_evt['name']} on {next_evt.get('formatted_date', next_evt['date'])}."
+                elif query_type == "upcoming" and result["events"]:
+                    event_list = [f"{e['name']} ({e.get('formatted_date', e['date'])})" for e in result["events"]]
+                    result["response_text"] = "Upcoming UFC events: " + ", ".join(event_list)
+                else:
+                    result["response_text"] = "No upcoming UFC events found."
+
+                _LOGGER.info("UFC info: %s", result.get("response_text", ""))
+                return result
+
+            except Exception as err:
+                _LOGGER.error("UFC API error: %s", err, exc_info=True)
+                return {"error": f"Failed to get UFC info: {str(err)}"}
+
         elif tool_name == "get_news":
             # Get news from TheNewsAPI.com (free tier - real-time!)
             
