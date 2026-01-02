@@ -67,6 +67,7 @@ from .const import (
     CONF_ENABLE_CALENDAR,
     CONF_ENABLE_CAMERAS,
     CONF_ENABLE_SPORTS,
+    CONF_ENABLE_STOCKS,
     CONF_ENABLE_NEWS,
     CONF_ENABLE_PLACES,
     CONF_ENABLE_RESTAURANTS,
@@ -92,6 +93,7 @@ from .const import (
     DEFAULT_ENABLE_CALENDAR,
     DEFAULT_ENABLE_CAMERAS,
     DEFAULT_ENABLE_SPORTS,
+    DEFAULT_ENABLE_STOCKS,
     DEFAULT_ENABLE_NEWS,
     DEFAULT_ENABLE_PLACES,
     DEFAULT_ENABLE_RESTAURANTS,
@@ -530,6 +532,7 @@ class LMStudioConversationEntity(ConversationEntity):
         self.enable_calendar = config.get(CONF_ENABLE_CALENDAR, DEFAULT_ENABLE_CALENDAR)
         self.enable_cameras = config.get(CONF_ENABLE_CAMERAS, DEFAULT_ENABLE_CAMERAS)
         self.enable_sports = config.get(CONF_ENABLE_SPORTS, DEFAULT_ENABLE_SPORTS)
+        self.enable_stocks = config.get(CONF_ENABLE_STOCKS, DEFAULT_ENABLE_STOCKS)
         self.enable_news = config.get(CONF_ENABLE_NEWS, DEFAULT_ENABLE_NEWS)
         self.enable_places = config.get(CONF_ENABLE_PLACES, DEFAULT_ENABLE_PLACES)
         self.enable_restaurants = config.get(CONF_ENABLE_RESTAURANTS, DEFAULT_ENABLE_RESTAURANTS)
@@ -820,6 +823,23 @@ class LMStudioConversationEntity(ConversationEntity):
                         "properties": {
                             "query_type": {"type": "string", "enum": ["next_event", "upcoming"], "description": "What info to get: 'next_event' for the next UFC event, 'upcoming' for list of upcoming events"}
                         }
+                    }
+                }
+            })
+
+        # ===== STOCKS (if enabled - free API, no key required) =====
+        if self.enable_stocks:
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "get_stock_price",
+                    "description": "Get current stock price and daily change. Use for: 'Apple stock', 'what's Tesla at', 'AAPL price', 'how is NVDA doing'. Works with stock symbols (AAPL, TSLA, GOOGL) or company names.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "symbol": {"type": "string", "description": "Stock symbol (e.g., 'AAPL', 'TSLA', 'GOOGL', 'MSFT', 'NVDA', 'AMZN') or company name (e.g., 'Apple', 'Tesla')"}
+                        },
+                        "required": ["symbol"]
                     }
                 }
             })
@@ -2241,16 +2261,81 @@ class LMStudioConversationEntity(ConversationEntity):
                         "venue": venue,
                         "summary": f"{away_name} @ {home_name} - {formatted_date}"
                     }
-                
+
+                # Get standings if requested
+                if query_type == "standings":
+                    try:
+                        # Extract sport and league from the schedule URL we built
+                        # URL format: https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams/{team_id}/schedule
+                        url_parts = url.split("/")
+                        sport_idx = url_parts.index("sports") + 1
+                        standings_sport = url_parts[sport_idx]
+                        standings_league = url_parts[sport_idx + 1]
+
+                        standings_url = f"https://site.api.espn.com/apis/v2/sports/{standings_sport}/{standings_league}/standings"
+                        async with self._session.get(standings_url, headers=headers) as standings_resp:
+                            if standings_resp.status == 200:
+                                standings_data = await standings_resp.json()
+
+                                # Find team in standings
+                                team_standing = None
+                                conference_name = ""
+
+                                # Handle different structures (conferences vs flat)
+                                if "children" in standings_data:
+                                    # Conference-based (NBA, NFL, etc.)
+                                    for conf in standings_data.get("children", []):
+                                        entries = conf.get("standings", {}).get("entries", [])
+                                        # Sort by wins
+                                        sorted_entries = sorted(entries, key=lambda x: int(next((s.get("value", 0) for s in x.get("stats", []) if s["name"] == "wins"), 0)), reverse=True)
+                                        for rank, entry in enumerate(sorted_entries, 1):
+                                            if entry.get("team", {}).get("displayName", "").lower() == full_name.lower():
+                                                team_standing = {"rank": rank, "entry": entry}
+                                                conference_name = conf.get("name", "")
+                                                break
+                                        if team_standing:
+                                            break
+                                else:
+                                    # Flat standings (soccer leagues)
+                                    entries = standings_data.get("standings", {}).get("entries", [])
+                                    sorted_entries = sorted(entries, key=lambda x: int(next((s.get("value", 0) for s in x.get("stats", []) if s["name"] in ["wins", "points"]), 0)), reverse=True)
+                                    for rank, entry in enumerate(sorted_entries, 1):
+                                        if entry.get("team", {}).get("displayName", "").lower() == full_name.lower():
+                                            team_standing = {"rank": rank, "entry": entry}
+                                            break
+
+                                if team_standing:
+                                    entry = team_standing["entry"]
+                                    stats = {s["name"]: s.get("displayValue", s.get("value")) for s in entry.get("stats", [])}
+                                    wins = stats.get("wins", "?")
+                                    losses = stats.get("losses", "?")
+                                    rank = team_standing["rank"]
+
+                                    result["standings"] = {
+                                        "rank": rank,
+                                        "wins": wins,
+                                        "losses": losses,
+                                        "conference": conference_name,
+                                        "summary": f"{full_name} is #{rank} in the {conference_name or 'league'} with a {wins}-{losses} record"
+                                    }
+                    except Exception as standings_err:
+                        _LOGGER.warning("Could not get standings: %s", standings_err)
+
                 # Build response text
                 response_parts = []
+                if "live_game" in result:
+                    lg = result["live_game"]
+                    response_parts.append(lg['summary'])
                 if "last_game" in result:
                     lg = result["last_game"]
                     response_parts.append(f"Last game: {lg['summary']} on {lg['date']}")
                 if "next_game" in result:
                     ng = result["next_game"]
                     response_parts.append(f"Next game: {ng['summary']}")
-                
+                if "standings" in result:
+                    st = result["standings"]
+                    response_parts.append(st['summary'])
+
                 result["response_text"] = ". ".join(response_parts) if response_parts else f"No game info found for {full_name}"
                 
                 _LOGGER.info("Sports info for %s: %s", full_name, result.get("response_text", ""))
@@ -2313,6 +2398,75 @@ class LMStudioConversationEntity(ConversationEntity):
             except Exception as err:
                 _LOGGER.error("UFC API error: %s", err, exc_info=True)
                 return {"error": f"Failed to get UFC info: {str(err)}"}
+
+        elif tool_name == "get_stock_price":
+            # Get stock price from Yahoo Finance API (free, no key required)
+            symbol = arguments.get("symbol", "").upper().strip()
+
+            if not symbol:
+                return {"error": "No stock symbol provided"}
+
+            # Common company name to symbol mappings
+            company_to_symbol = {
+                "apple": "AAPL", "tesla": "TSLA", "google": "GOOGL", "alphabet": "GOOGL",
+                "microsoft": "MSFT", "amazon": "AMZN", "meta": "META", "facebook": "META",
+                "nvidia": "NVDA", "netflix": "NFLX", "disney": "DIS", "nike": "NKE",
+                "coca-cola": "KO", "coke": "KO", "pepsi": "PEP", "walmart": "WMT",
+                "costco": "COST", "starbucks": "SBUX", "mcdonalds": "MCD", "boeing": "BA",
+                "intel": "INTC", "amd": "AMD", "paypal": "PYPL", "visa": "V",
+                "mastercard": "MA", "jpmorgan": "JPM", "goldman": "GS", "berkshire": "BRK-B",
+                "johnson": "JNJ", "pfizer": "PFE", "moderna": "MRNA", "uber": "UBER",
+                "lyft": "LYFT", "airbnb": "ABNB", "spotify": "SPOT", "snap": "SNAP",
+                "twitter": "X", "x": "X", "salesforce": "CRM", "oracle": "ORCL",
+                "ibm": "IBM", "cisco": "CSCO", "adobe": "ADBE", "zoom": "ZM",
+            }
+
+            # Convert company name to symbol if needed
+            symbol_lookup = symbol.lower()
+            if symbol_lookup in company_to_symbol:
+                symbol = company_to_symbol[symbol_lookup]
+
+            try:
+                self._track_api_call("stocks")
+                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+                async with asyncio.timeout(API_TIMEOUT):
+                    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=1d"
+                    async with self._session.get(url, headers=headers) as resp:
+                        if resp.status != 200:
+                            return {"error": f"Could not find stock symbol '{symbol}'"}
+                        data = await resp.json()
+
+                result_data = data.get("chart", {}).get("result", [{}])[0]
+                meta = result_data.get("meta", {})
+
+                if not meta or "regularMarketPrice" not in meta:
+                    return {"error": f"Could not find stock data for '{symbol}'"}
+
+                price = meta.get("regularMarketPrice", 0)
+                prev_close = meta.get("previousClose", meta.get("chartPreviousClose", price))
+                change = price - prev_close if prev_close else 0
+                pct_change = (change / prev_close * 100) if prev_close else 0
+                company_name = meta.get("shortName", meta.get("longName", symbol))
+
+                # Format the response
+                direction = "up" if change >= 0 else "down"
+                result = {
+                    "symbol": symbol,
+                    "company": company_name,
+                    "price": round(price, 2),
+                    "change": round(change, 2),
+                    "percent_change": round(pct_change, 2),
+                    "previous_close": round(prev_close, 2) if prev_close else None,
+                    "response_text": f"{company_name} ({symbol}) is at ${price:.2f}, {direction} ${abs(change):.2f} ({pct_change:+.2f}%) today."
+                }
+
+                _LOGGER.info("Stock price for %s: %s", symbol, result.get("response_text", ""))
+                return result
+
+            except Exception as err:
+                _LOGGER.error("Stock API error: %s", err, exc_info=True)
+                return {"error": f"Failed to get stock price: {str(err)}"}
 
         elif tool_name == "get_news":
             # Get news from TheNewsAPI.com (free tier - real-time!)
