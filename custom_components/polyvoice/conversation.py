@@ -802,7 +802,7 @@ class LMStudioConversationEntity(ConversationEntity):
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "team_name": {"type": "string", "description": "Team name (e.g., 'Florida Panthers', 'Miami Heat', 'Manchester City', 'Inter Miami', 'Miami Dolphins')"},
+                            "team_name": {"type": "string", "description": "Team name (e.g., 'Florida Panthers', 'Miami Heat', 'Manchester City', 'Liverpool', 'Alabama Crimson Tide', 'Duke Blue Devils')"},
                             "query_type": {"type": "string", "enum": ["last_game", "next_game", "standings", "both"], "description": "What info to get: 'last_game' for recent result, 'next_game' for upcoming, 'standings' for league position, 'both' for last and next games (default)"}
                         },
                         "required": ["team_name"]
@@ -2036,12 +2036,15 @@ class LMStudioConversationEntity(ConversationEntity):
                 headers = {"User-Agent": "HomeAssistant-PolyVoice/1.0"}
                 team_key = team_name.lower().strip()
 
-                # Search for team in major US leagues directly (search API is deprecated)
+                # Search for team in major leagues directly (search API is deprecated)
                 leagues_to_try = [
                     ("basketball", "nba"),
                     ("football", "nfl"),
                     ("baseball", "mlb"),
                     ("hockey", "nhl"),
+                    ("soccer", "eng.1"),  # Premier League
+                    ("football", "college-football"),  # NCAA Football
+                    ("basketball", "mens-college-basketball"),  # NCAA Basketball
                 ]
 
                 team_found = False
@@ -2358,10 +2361,16 @@ class LMStudioConversationEntity(ConversationEntity):
                 "city": "manchester city",
                 "inter miami": "inter miami",
                 "marlins": "miami marlins",
+                "united": "manchester united",
+                "liverpool": "liverpool",
+                "arsenal": "arsenal",
+                "chelsea": "chelsea",
+                "spurs": "tottenham hotspur",
+                "tottenham": "tottenham hotspur",
             }
-            
+
             if sport not in sport_endpoints:
-                return {"error": f"Unknown sport: {sport}. Supported: nba, nfl, nhl, mlb, mls, epl"}
+                return {"error": f"Unknown sport: {sport}. Supported: nba, nfl, nhl, mlb, mls, epl, ncaaf, ncaab"}
             
             endpoint = sport_endpoints[sport]
             base_url = f"http://site.api.espn.com/apis/site/v2/sports/{endpoint}/scoreboard"
