@@ -1399,16 +1399,12 @@ class LMStudioConversationEntity(ConversationEntity):
 
         messages = []
 
-        if self.system_prompt:
-            # Inject current date into system prompt
-            current_date = datetime.now().strftime("%A, %B %d, %Y")
-            system_prompt_with_date = self.system_prompt.replace(
-                "[CURRENT_DATE_WILL_BE_INJECTED_HERE]",
-                f"TODAY'S DATE: {current_date}"
-            )
+        # Add system prompt with date and filtered for disabled features
+        system_prompt = self._get_effective_system_prompt()
+        if system_prompt:
             messages.append({
                 "role": "system",
-                "content": system_prompt_with_date
+                "content": system_prompt
             })
         
         # Add user message directly (STATELESS - no history)
