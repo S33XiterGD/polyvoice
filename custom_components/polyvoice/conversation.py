@@ -644,22 +644,33 @@ class LMStudioConversationEntity(ConversationEntity):
             filtered_lines.append("PURE LLM MODE - FULL SMART HOME CONTROL")
             filtered_lines.append("=" * 60)
             filtered_lines.append("")
-            filtered_lines.append("You have COMPLETE control over this smart home. Use the control_device tool with:")
-            filtered_lines.append("- entity_id: The exact entity ID (e.g., 'light.kitchen_light') - PREFERRED for accuracy")
-            filtered_lines.append("- OR device: A fuzzy device name (e.g., 'kitchen light') - will attempt to match")
+            filtered_lines.append("!!! CRITICAL - ANTI-HALLUCINATION RULES !!!")
+            filtered_lines.append("1. You MUST call the control_device tool to control ANY device")
+            filtered_lines.append("2. NEVER say you did something without calling the tool first")
+            filtered_lines.append("3. NEVER assume success - only confirm based on tool response")
+            filtered_lines.append("4. If a tool returns an error, tell the user what went wrong")
+            filtered_lines.append("5. If you can't find a device, say so - don't pretend to control it")
+            filtered_lines.append("6. WAIT for the tool response before confirming any action")
+            filtered_lines.append("")
+            filtered_lines.append("DEVICE CONTROL - Use the control_device tool with:")
+            filtered_lines.append("- entity_id: PREFERRED - exact entity ID (e.g., 'cover.living_room_shades')")
+            filtered_lines.append("- entity_ids: Multiple entity IDs at once")
+            filtered_lines.append("- area + domain: All devices of type in area")
+            filtered_lines.append("- device: Fuzzy name matching (fallback)")
             filtered_lines.append("")
             filtered_lines.append("ACTIONS:")
-            filtered_lines.append("- turn_on / turn_off / toggle - for lights, switches, fans, etc.")
-            filtered_lines.append("- lock / unlock - for locks")
-            filtered_lines.append("- open / close - for covers (garage doors, blinds)")
-            filtered_lines.append("- brightness (0-100) - optional for lights")
+            filtered_lines.append("- turn_on / turn_off / toggle - lights, switches, fans")
+            filtered_lines.append("- lock / unlock - locks")
+            filtered_lines.append("- open / close - covers (garage doors, blinds, shades)")
+            filtered_lines.append("- stop - stop cover movement")
+            filtered_lines.append("- preset / favorite - set cover to favorite/preset position")
+            filtered_lines.append("- position (0-100) - set cover to specific position (0=closed, 100=open)")
+            filtered_lines.append("- brightness (0-100) - set light brightness")
             filtered_lines.append("")
-            filtered_lines.append("TIPS:")
-            filtered_lines.append("- When user says a room name, control ALL lights in that room/area")
-            filtered_lines.append("- 'Make it dark' = turn off lights in the current context")
-            filtered_lines.append("- 'Lock up' or 'secure the house' = lock all locks")
-            filtered_lines.append("- 'Good night' = common bedtime routine (turn off lights, lock doors)")
-            filtered_lines.append("- Use entity_id when you know the exact device, use device name for fuzzy matching")
+            filtered_lines.append("EXAMPLES:")
+            filtered_lines.append("- 'Set shades to favorite' -> control_device(entity_id='cover.xxx', action='preset')")
+            filtered_lines.append("- 'Open blinds halfway' -> control_device(entity_id='cover.xxx', action='position', position=50)")
+            filtered_lines.append("- 'Turn off kitchen' -> control_device(area='Kitchen', domain='light', action='turn_off')")
             filtered_lines.append("")
 
             # Inject the FULL device list
@@ -1259,40 +1270,44 @@ class LMStudioConversationEntity(ConversationEntity):
                 "type": "function",
                 "function": {
                     "name": "control_device",
-                    "description": "Control smart home devices. PREFERRED: Use entity_id for accuracy. Can control single device or multiple devices at once. Use for: 'turn on/off', 'lock/unlock', 'open/close', 'toggle'.",
+                    "description": "Control smart home devices. MUST use this tool - NEVER claim success without calling it. PREFERRED: Use entity_id for accuracy.",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "entity_id": {
                                 "type": "string",
-                                "description": "PREFERRED: Exact entity ID from the device list (e.g., 'light.kitchen_light', 'lock.front_door'). Use this when you know the exact entity."
+                                "description": "PREFERRED: Exact entity ID from device list (e.g., 'cover.living_room_shades', 'light.kitchen')"
                             },
                             "entity_ids": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "Multiple entity IDs to control at once (e.g., ['light.kitchen', 'light.living_room'] for 'turn on downstairs lights')"
+                                "description": "Multiple entity IDs to control at once"
                             },
                             "device": {
                                 "type": "string",
-                                "description": "FALLBACK: Fuzzy device name if entity_id unknown. Examples: 'kitchen light', 'front door'"
+                                "description": "FALLBACK: Fuzzy device name if entity_id unknown"
                             },
                             "area": {
                                 "type": "string",
-                                "description": "Control ALL devices of a type in an area. Examples: 'Kitchen', 'Living Room', 'Bedroom'"
+                                "description": "Control ALL devices of type in an area (e.g., 'Kitchen', 'Living Room')"
                             },
                             "domain": {
                                 "type": "string",
                                 "enum": ["light", "switch", "lock", "cover", "fan", "all"],
-                                "description": "Device type filter when using area. 'all' controls all devices in area."
+                                "description": "Device type filter when using area"
                             },
                             "action": {
                                 "type": "string",
-                                "enum": ["turn_on", "turn_off", "toggle", "lock", "unlock", "open", "close"],
-                                "description": "Action to perform"
+                                "enum": ["turn_on", "turn_off", "toggle", "lock", "unlock", "open", "close", "stop", "preset", "favorite", "set_position"],
+                                "description": "Action: turn_on/off, lock/unlock, open/close, stop (covers), preset/favorite (cover preset position), set_position (cover 0-100)"
                             },
                             "brightness": {
                                 "type": "integer",
-                                "description": "Brightness 0-100 for lights (optional)"
+                                "description": "Brightness 0-100 for lights"
+                            },
+                            "position": {
+                                "type": "integer",
+                                "description": "Position 0-100 for covers (0=closed, 100=fully open)"
                             }
                         },
                         "required": ["action"]
@@ -3486,6 +3501,7 @@ class LMStudioConversationEntity(ConversationEntity):
             # Control smart home devices (Pure LLM Mode) - supports multiple input methods
             action = arguments.get("action", "").strip().lower()
             brightness = arguments.get("brightness")
+            position = arguments.get("position")
 
             # Input methods (in priority order)
             direct_entity_id = arguments.get("entity_id", "").strip()
@@ -3495,7 +3511,11 @@ class LMStudioConversationEntity(ConversationEntity):
             device_name = arguments.get("device", "").strip()
 
             if not action:
-                return {"error": "No action specified. Use turn_on, turn_off, toggle, lock, unlock, open, or close."}
+                return {"error": "No action specified. Use turn_on, turn_off, toggle, lock, unlock, open, close, stop, preset, favorite, or set_position."}
+
+            # Normalize preset/favorite to same action
+            if action == "favorite":
+                action = "preset"
 
             # Map actions to appropriate HA services based on domain
             service_map = {
@@ -3503,13 +3523,23 @@ class LMStudioConversationEntity(ConversationEntity):
                 "switch": {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
                 "fan": {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
                 "lock": {"lock": "lock", "unlock": "unlock", "turn_on": "lock", "turn_off": "unlock"},
-                "cover": {"open": "open_cover", "close": "close_cover", "turn_on": "open_cover", "turn_off": "close_cover", "toggle": "toggle"},
+                "cover": {
+                    "open": "open_cover",
+                    "close": "close_cover",
+                    "turn_on": "open_cover",
+                    "turn_off": "close_cover",
+                    "toggle": "toggle",
+                    "stop": "stop_cover",
+                    "set_position": "set_cover_position",
+                    "preset": "set_cover_position",  # Will use preset position from attributes
+                },
                 "input_boolean": {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
                 "automation": {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
                 "scene": {"turn_on": "turn_on"},
                 "script": {"turn_on": "turn_on", "turn_off": "turn_off"},
                 "vacuum": {"turn_on": "start", "turn_off": "return_to_base"},
                 "media_player": {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
+                "button": {"turn_on": "press", "press": "press"},
             }
 
             action_words = {
@@ -3520,8 +3550,11 @@ class LMStudioConversationEntity(ConversationEntity):
                 "unlock": "unlocked",
                 "open_cover": "opened",
                 "close_cover": "closed",
+                "stop_cover": "stopped",
+                "set_cover_position": "set position for",
                 "start": "started",
                 "return_to_base": "sent home",
+                "press": "pressed",
             }
 
             # Collect entities to control
@@ -3645,14 +3678,59 @@ class LMStudioConversationEntity(ConversationEntity):
                     if domain == "light" and brightness is not None and action == "turn_on":
                         service_data["brightness_pct"] = max(0, min(100, brightness))
 
+                    # Handle cover position
+                    if domain == "cover" and action == "set_position" and position is not None:
+                        service_data["position"] = max(0, min(100, position))
+
+                    # Handle cover preset/favorite position
+                    if domain == "cover" and action == "preset":
+                        # First, try to find a button entity for this cover's favorite/preset
+                        cover_name = entity_id.split(".")[-1]
+                        possible_buttons = [
+                            f"button.{cover_name}_favorite_position",
+                            f"button.{cover_name}_preset_position",
+                            f"button.{cover_name}_favorite",
+                            f"button.{cover_name}_preset",
+                        ]
+
+                        button_found = False
+                        for button_id in possible_buttons:
+                            button_state = self.hass.states.get(button_id)
+                            if button_state:
+                                # Found a preset button - press it
+                                await self.hass.services.async_call(
+                                    "button", "press", {"entity_id": button_id}, blocking=True
+                                )
+                                button_found = True
+                                _LOGGER.info("Pressed preset button %s for cover %s", button_id, entity_id)
+                                break
+
+                        if not button_found:
+                            # No button found, check for preset_position attribute or use 50% as default
+                            state = self.hass.states.get(entity_id)
+                            preset_pos = None
+                            if state:
+                                preset_pos = state.attributes.get("preset_position")
+                                if preset_pos is None:
+                                    preset_pos = state.attributes.get("favorite_position")
+
+                            if preset_pos is not None:
+                                service_data["position"] = preset_pos
+                            else:
+                                # Default to 50% if no preset found
+                                _LOGGER.warning("No preset position found for %s, using 50%%", entity_id)
+                                service_data["position"] = 50
+
                     # Call the service
                     await self.hass.services.async_call(
                         domain, service, service_data, blocking=True
                     )
 
                     action_word = action_words.get(service, action)
+                    if action == "preset":
+                        action_word = "set to favorite position"
                     controlled.append(friendly_name)
-                    _LOGGER.info("Device control: %s.%s on %s (%s)", domain, service, friendly_name, entity_id)
+                    _LOGGER.info("Device control: %s.%s on %s (%s) data=%s", domain, service, friendly_name, entity_id, service_data)
 
                 except Exception as err:
                     _LOGGER.error("Error controlling device %s: %s", entity_id, err)
@@ -3661,13 +3739,23 @@ class LMStudioConversationEntity(ConversationEntity):
             # Build response
             if controlled:
                 if len(controlled) == 1:
-                    action_word = action_words.get(service, action)
-                    response = f"I've {action_word} the {controlled[0]}."
-                    if brightness is not None and action == "turn_on":
-                        response = f"I've {action_word} the {controlled[0]} at {brightness}% brightness."
+                    if action == "preset":
+                        response = f"I've set the {controlled[0]} to its favorite position."
+                    elif action == "set_position" and position is not None:
+                        response = f"I've set the {controlled[0]} to {position}% position."
+                    elif brightness is not None and action == "turn_on":
+                        response = f"I've turned on the {controlled[0]} at {brightness}% brightness."
+                    else:
+                        action_word = action_words.get(service, action)
+                        response = f"I've {action_word} the {controlled[0]}."
                 else:
-                    action_word = action_words.get(service, action)
-                    response = f"I've {action_word} {len(controlled)} devices: {', '.join(controlled[:5])}"
+                    if action == "preset":
+                        response = f"I've set {len(controlled)} devices to their favorite positions: {', '.join(controlled[:5])}"
+                    elif action == "set_position" and position is not None:
+                        response = f"I've set {len(controlled)} devices to {position}%: {', '.join(controlled[:5])}"
+                    else:
+                        action_word = action_words.get(service, action)
+                        response = f"I've {action_word} {len(controlled)} devices: {', '.join(controlled[:5])}"
                     if len(controlled) > 5:
                         response += f" and {len(controlled) - 5} more"
                     response += "."
