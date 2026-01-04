@@ -144,6 +144,7 @@ DYNAMIC_MODEL_PROVIDERS = [
     PROVIDER_OPENROUTER,
     PROVIDER_LM_STUDIO,
     PROVIDER_OLLAMA,
+    PROVIDER_GOOGLE,
 ]
 
 
@@ -159,11 +160,15 @@ async def fetch_provider_models(
 
     try:
         async with aiohttp.ClientSession() as session:
-            headers = {}
-            if api_key:
-                headers["Authorization"] = f"Bearer {api_key}"
+            # Google Gemini uses different API format
+            if provider == PROVIDER_GOOGLE:
+                url = f"{base_url}/models?key={api_key}"
+                headers = {}
+            else:
+                # OpenAI-compatible providers
+                url = f"{base_url}/models"
+                headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
-            url = f"{base_url}/models"
             async with session.get(
                 url,
                 headers=headers,
@@ -177,25 +182,51 @@ async def fetch_provider_models(
                     return []
 
                 data = await response.json()
-                models = data.get("data", [])
 
-                # Extract model IDs and filter for chat models
-                model_ids = []
-                for model in models:
-                    model_id = model.get("id", "")
-                    if not model_id:
-                        continue
+                # Google returns {"models": [...]} with "name" field
+                # OpenAI-compatible returns {"data": [...]} with "id" field
+                if provider == PROVIDER_GOOGLE:
+                    models = data.get("models", [])
+                    model_ids = []
+                    for model in models:
+                        # Google format: "models/gemini-1.5-pro" -> "gemini-1.5-pro"
+                        name = model.get("name", "")
+                        if not name:
+                            continue
 
-                    # Skip non-chat models (whisper, tts, embedding, guard/safeguard models)
-                    lower_id = model_id.lower()
-                    if any(skip in lower_id for skip in [
-                        "whisper", "tts", "embedding", "embed",
-                        "guard", "safeguard", "moderation",
-                        "audio", "speech", "vision-preview"
-                    ]):
-                        continue
+                        # Extract model ID from full name
+                        model_id = name.replace("models/", "")
 
-                    model_ids.append(model_id)
+                        # Only include generateContent-capable models (chat models)
+                        supported_methods = model.get("supportedGenerationMethods", [])
+                        if "generateContent" not in supported_methods:
+                            continue
+
+                        # Skip embedding and AQA models
+                        lower_id = model_id.lower()
+                        if any(skip in lower_id for skip in ["embedding", "aqa", "imagen"]):
+                            continue
+
+                        model_ids.append(model_id)
+                else:
+                    # OpenAI-compatible providers
+                    models = data.get("data", [])
+                    model_ids = []
+                    for model in models:
+                        model_id = model.get("id", "")
+                        if not model_id:
+                            continue
+
+                        # Skip non-chat models
+                        lower_id = model_id.lower()
+                        if any(skip in lower_id for skip in [
+                            "whisper", "tts", "embedding", "embed",
+                            "guard", "safeguard", "moderation",
+                            "audio", "speech", "vision-preview"
+                        ]):
+                            continue
+
+                        model_ids.append(model_id)
 
                 # Sort alphabetically for better UX
                 model_ids.sort()
