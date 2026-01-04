@@ -2229,8 +2229,6 @@ class LMStudioConversationEntity(ConversationEntity):
                 live_game_from_scoreboard = None
                 next_game_from_scoreboard = None
                 try:
-                    today = datetime.now().strftime("%Y%m%d")
-
                     # Build list of scoreboards to check
                     scoreboards_to_check = [(sport, league)]
                     if sport == "soccer":
@@ -2244,7 +2242,8 @@ class LMStudioConversationEntity(ConversationEntity):
                         if live_game_from_scoreboard and next_game_from_scoreboard:
                             break  # Already found both
 
-                        scoreboard_url = f"https://site.api.espn.com/apis/site/v2/sports/{sb_sport}/{sb_league}/scoreboard?dates={today}"
+                        # Don't filter by date - scoreboard without date returns upcoming games too
+                        scoreboard_url = f"https://site.api.espn.com/apis/site/v2/sports/{sb_sport}/{sb_league}/scoreboard"
                         async with self._session.get(scoreboard_url, headers=headers) as sb_resp:
                             if sb_resp.status != 200:
                                 continue
