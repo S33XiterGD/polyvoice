@@ -2192,11 +2192,17 @@ class LMStudioConversationEntity(ConversationEntity):
                 full_name = team_name
                 team_leagues = []  # Track all leagues this team plays in
 
-                # Two-pass search: exact abbreviation match first, then substring match
+                # Two-pass search: exact abbreviation match first, then word-based match
+                search_words = team_key.split()  # Split "man city" into ["man", "city"]
+
+                _LOGGER.warning("=== SPORTS: Searching for team '%s' (words: %s) ===", team_key, search_words)
+
                 for match_type in ["abbrev", "name"]:
                     if team_found:
                         break
                     for sport, league in leagues_to_try:
+                        if team_found:
+                            break
                         teams_url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams?limit=500"
                         async with self._session.get(teams_url, headers=headers) as teams_resp:
                             if teams_resp.status == 200:
@@ -2207,19 +2213,27 @@ class LMStudioConversationEntity(ConversationEntity):
                                     if match_type == "abbrev":
                                         match = team_key == t.get("abbreviation", "").lower()
                                     else:
-                                        match = (team_key in t.get("displayName", "").lower() or
-                                                team_key in t.get("shortDisplayName", "").lower() or
-                                                team_key in t.get("nickname", "").lower())
+                                        # Word-based matching: all search words must appear in team name
+                                        display_name = t.get("displayName", "").lower()
+                                        short_name = t.get("shortDisplayName", "").lower()
+                                        nickname = t.get("nickname", "").lower()
+                                        combined = f"{display_name} {short_name} {nickname}"
+
+                                        # Check if ALL search words are in the combined name
+                                        match = all(word in combined for word in search_words)
+
                                     if match:
                                         team_id = t.get("id", "")
                                         full_name = t.get("displayName", team_name)
                                         url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams/{team_id}/schedule"
                                         team_leagues.append((sport, league))
+                                        _LOGGER.warning("=== SPORTS: Found team '%s' (id=%s) in %s/%s ===", full_name, team_id, sport, league)
                                         if not team_found:
                                             team_found = True
                                         break
 
                 if not team_found:
+                    _LOGGER.warning("=== SPORTS: Team '%s' NOT FOUND in any league ===", team_name)
                     return {"error": f"Team '{team_name}' not found. Try the full team name (e.g., 'Miami Heat', 'New York Yankees')"}
 
                 result = {"team": full_name}
@@ -2238,19 +2252,19 @@ class LMStudioConversationEntity(ConversationEntity):
                             if (sport, sl) not in scoreboards_to_check:
                                 scoreboards_to_check.append((sport, sl))
 
+                    _LOGGER.warning("=== SPORTS: Checking %d scoreboards for team_id=%s ===", len(scoreboards_to_check), team_id)
                     for sb_sport, sb_league in scoreboards_to_check:
                         if live_game_from_scoreboard and next_game_from_scoreboard:
                             break  # Already found both
 
                         # Don't filter by date - scoreboard without date returns upcoming games too
                         scoreboard_url = f"https://site.api.espn.com/apis/site/v2/sports/{sb_sport}/{sb_league}/scoreboard"
-                        _LOGGER.debug("Checking scoreboard: %s", scoreboard_url)
                         async with self._session.get(scoreboard_url, headers=headers) as sb_resp:
                             if sb_resp.status != 200:
-                                _LOGGER.debug("Scoreboard %s returned status %s", sb_league, sb_resp.status)
+                                _LOGGER.warning("=== SPORTS: Scoreboard %s status %s ===", sb_league, sb_resp.status)
                                 continue
                             sb_data = await sb_resp.json()
-                            _LOGGER.debug("Scoreboard %s has %d events", sb_league, len(sb_data.get("events", [])))
+                            _LOGGER.warning("=== SPORTS: %s has %d events ===", sb_league, len(sb_data.get("events", [])))
                             for sb_event in sb_data.get("events", []):
                                 sb_comp = sb_event.get("competitions", [{}])[0]
                                 sb_status = sb_comp.get("status", {}).get("type", {})
@@ -2263,7 +2277,7 @@ class LMStudioConversationEntity(ConversationEntity):
                                 if team_id not in sb_team_ids:
                                     continue
 
-                                _LOGGER.debug("Found team %s in %s game, state=%s, teams=%s", team_id, sb_league, sb_state, sb_team_ids)
+                                _LOGGER.warning("=== SPORTS: FOUND %s in %s state=%s ===", team_id, sb_league, sb_state)
 
                                 home_team_sb = next((c for c in sb_competitors if c.get("homeAway") == "home"), {})
                                 away_team_sb = next((c for c in sb_competitors if c.get("homeAway") == "away"), {})
