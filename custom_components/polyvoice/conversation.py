@@ -2220,19 +2220,69 @@ class LMStudioConversationEntity(ConversationEntity):
 
                 if not team_found:
                     return {"error": f"Team '{team_name}' not found. Try the full team name (e.g., 'Miami Heat', 'New York Yankees')"}
-                
+
+                result = {"team": full_name}
+
+                # Check scoreboard FIRST for live games (schedule endpoint often has stale data)
+                live_game_from_scoreboard = None
+                try:
+                    today = datetime.now().strftime("%Y%m%d")
+                    scoreboard_url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard?dates={today}"
+                    async with self._session.get(scoreboard_url, headers=headers) as sb_resp:
+                        if sb_resp.status == 200:
+                            sb_data = await sb_resp.json()
+                            for sb_event in sb_data.get("events", []):
+                                sb_comp = sb_event.get("competitions", [{}])[0]
+                                sb_status = sb_comp.get("status", {}).get("type", {})
+
+                                # Only look for in-progress games
+                                if sb_status.get("state") != "in":
+                                    continue
+
+                                sb_competitors = sb_comp.get("competitors", [])
+                                sb_team_ids = [c.get("team", {}).get("id", "") for c in sb_competitors]
+
+                                # Check if our team is in this game
+                                if team_id in sb_team_ids:
+                                    home_team_sb = next((c for c in sb_competitors if c.get("homeAway") == "home"), {})
+                                    away_team_sb = next((c for c in sb_competitors if c.get("homeAway") == "away"), {})
+
+                                    home_name = home_team_sb.get("team", {}).get("displayName", "Home")
+                                    away_name = away_team_sb.get("team", {}).get("displayName", "Away")
+
+                                    # Scoreboard scores are strings
+                                    home_score = home_team_sb.get("score", "0")
+                                    away_score = away_team_sb.get("score", "0")
+                                    if isinstance(home_score, dict):
+                                        home_score = home_score.get("displayValue", "0")
+                                    if isinstance(away_score, dict):
+                                        away_score = away_score.get("displayValue", "0")
+
+                                    status_detail = sb_status.get("detail", "In Progress")
+
+                                    result["live_game"] = {
+                                        "home_team": home_name,
+                                        "away_team": away_name,
+                                        "home_score": home_score,
+                                        "away_score": away_score,
+                                        "status": status_detail,
+                                        "summary": f"LIVE: {away_name} {away_score} @ {home_name} {home_score} ({status_detail})"
+                                    }
+                                    live_game_from_scoreboard = True
+                                    break
+                except Exception as e:
+                    _LOGGER.warning("Failed to check scoreboard for live games: %s", e)
+
                 async with self._session.get(url, headers=headers) as resp:
                     if resp.status != 200:
                         return {"error": f"ESPN API error: {resp.status}"}
                     data = await resp.json()
-                
+
                 events = data.get("events", [])
-                
-                if not events:
+
+                if not events and not live_game_from_scoreboard:
                     return {"error": f"No scheduled games found for {full_name}"}
-                
-                result = {"team": full_name}
-                
+
                 # Find last completed game, live game, and next upcoming game
                 now = datetime.now()
                 last_game = None
@@ -2288,7 +2338,8 @@ class LMStudioConversationEntity(ConversationEntity):
                     }
 
                 # Format live game (takes priority - always shown if there's a game in progress)
-                if live_game:
+                # Skip if we already got live game from scoreboard check above
+                if live_game and not live_game_from_scoreboard:
                     comp = live_game.get("competitions", [{}])[0]
                     competitors = comp.get("competitors", [])
                     home_team = next((c for c in competitors if c.get("homeAway") == "home"), {})
@@ -2296,14 +2347,52 @@ class LMStudioConversationEntity(ConversationEntity):
 
                     home_name = home_team.get("team", {}).get("displayName", "Home")
                     away_name = away_team.get("team", {}).get("displayName", "Away")
-                    # Score can be a dict {'value': 34.0, 'displayValue': '34'} or a string
-                    home_score_raw = home_team.get("score", "0")
-                    away_score_raw = away_team.get("score", "0")
-                    home_score = home_score_raw.get("displayValue", home_score_raw) if isinstance(home_score_raw, dict) else home_score_raw
-                    away_score = away_score_raw.get("displayValue", away_score_raw) if isinstance(away_score_raw, dict) else away_score_raw
+                    home_team_id = home_team.get("team", {}).get("id", "")
+                    away_team_id = away_team.get("team", {}).get("id", "")
 
-                    # Get game clock/period info
+                    # Schedule endpoint doesn't have live scores - fetch from scoreboard
+                    home_score = "0"
+                    away_score = "0"
                     status_detail = comp.get("status", {}).get("type", {}).get("detail", "In Progress")
+
+                    try:
+                        # Get today's date for scoreboard
+                        game_date_str = live_game.get("date", "")
+                        if game_date_str:
+                            game_dt = datetime.fromisoformat(game_date_str.replace("Z", "+00:00"))
+                            scoreboard_date = game_dt.strftime("%Y%m%d")
+                        else:
+                            scoreboard_date = datetime.now().strftime("%Y%m%d")
+
+                        scoreboard_url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard?dates={scoreboard_date}"
+                        async with self._session.get(scoreboard_url, headers=headers) as sb_resp:
+                            if sb_resp.status == 200:
+                                sb_data = await sb_resp.json()
+                                for sb_event in sb_data.get("events", []):
+                                    sb_comp = sb_event.get("competitions", [{}])[0]
+                                    sb_competitors = sb_comp.get("competitors", [])
+
+                                    # Match by team IDs
+                                    sb_team_ids = [c.get("team", {}).get("id", "") for c in sb_competitors]
+                                    if home_team_id in sb_team_ids or away_team_id in sb_team_ids:
+                                        # Found the game - extract live scores
+                                        for c in sb_competitors:
+                                            score_raw = c.get("score", "0")
+                                            if isinstance(score_raw, dict):
+                                                score_val = score_raw.get("displayValue", str(score_raw.get("value", "0")))
+                                            else:
+                                                score_val = str(score_raw) if score_raw else "0"
+
+                                            if c.get("homeAway") == "home":
+                                                home_score = score_val
+                                            else:
+                                                away_score = score_val
+
+                                        # Get updated status from scoreboard
+                                        status_detail = sb_comp.get("status", {}).get("type", {}).get("detail", status_detail)
+                                        break
+                    except Exception as e:
+                        _LOGGER.warning("Failed to fetch live scores from scoreboard: %s", e)
 
                     result["live_game"] = {
                         "home_team": home_name,
@@ -2331,7 +2420,20 @@ class LMStudioConversationEntity(ConversationEntity):
                             game_dt = datetime.fromisoformat(game_date_str.replace("Z", "+00:00"))
                             # Convert to HA configured timezone
                             game_dt_local = game_dt.astimezone(dt_util.get_time_zone(self.hass.config.time_zone))
-                            formatted_date = game_dt_local.strftime("%A, %B %d at %I:%M %p")
+                            now_local = datetime.now(dt_util.get_time_zone(self.hass.config.time_zone))
+
+                            # Check if game is today or tomorrow
+                            game_date_only = game_dt_local.date()
+                            today = now_local.date()
+                            tomorrow = today + timedelta(days=1)
+
+                            time_str = game_dt_local.strftime("%I:%M %p").lstrip("0")
+                            if game_date_only == today:
+                                formatted_date = f"Today at {time_str}"
+                            elif game_date_only == tomorrow:
+                                formatted_date = f"Tomorrow at {time_str}"
+                            else:
+                                formatted_date = game_dt_local.strftime("%A, %B %d at %I:%M %p")
                         except (ValueError, KeyError, TypeError, AttributeError):
                             formatted_date = game_date_str[:10]
                     else:
@@ -2787,10 +2889,17 @@ class LMStudioConversationEntity(ConversationEntity):
                                     home_team = None
                                     away_team = None
                                     for comp in competitors:
+                                        # Score can be a dict {'value': 7.0, 'displayValue': '7'} or a string
+                                        score_raw = comp.get("score", "0")
+                                        if isinstance(score_raw, dict):
+                                            score_val = score_raw.get("displayValue", str(score_raw.get("value", "0")))
+                                        else:
+                                            score_val = str(score_raw) if score_raw else "0"
+
                                         team_info = {
                                             "name": comp.get("team", {}).get("displayName", "Unknown"),
                                             "abbreviation": comp.get("team", {}).get("abbreviation", ""),
-                                            "score": comp.get("score", "0"),
+                                            "score": score_val,
                                             "winner": comp.get("winner", False)
                                         }
                                         if comp.get("homeAway") == "home":

@@ -12,7 +12,7 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.CONVERSATION]
+PLATFORMS: list[Platform] = [Platform.CONVERSATION, Platform.UPDATE]
 
 
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
