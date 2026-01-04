@@ -647,7 +647,9 @@ class LMStudioConversationEntity(ConversationEntity):
             filtered_lines.append("!!! CRITICAL RULES - MUST FOLLOW !!!")
             filtered_lines.append("1. ALWAYS call control_device tool - NEVER claim success without it")
             filtered_lines.append("2. Use entity_id from device list below - fastest & most accurate")
-            filtered_lines.append("3. Respond BRIEFLY after tool confirms success")
+            filtered_lines.append("3. MATCH THE EXACT ROOM NAME the user says! 'living room' != 'bedroom'")
+            filtered_lines.append("4. If user says 'living room shade' -> find entity with 'living_room' in the ID")
+            filtered_lines.append("5. Respond BRIEFLY after tool confirms success")
             filtered_lines.append("")
             filtered_lines.append("-" * 50)
             filtered_lines.append("QUICK REFERENCE - CONTROL_DEVICE ACTIONS")
@@ -940,19 +942,19 @@ class LMStudioConversationEntity(ConversationEntity):
                 else:
                     no_area.append(e)
 
-            # Print by area
+            # Print by area - entity_id FIRST for easy copy
             for area_name in sorted(by_area.keys()):
                 lines.append(f"  [{area_name}]")
                 for e in sorted(by_area[area_name], key=lambda x: x["name"]):
-                    alias_str = f" (aliases: {', '.join(e['aliases'])})" if e["aliases"] else ""
-                    lines.append(f"    - {e['name']}: {e['entity_id']} [{e['state']}]{alias_str}")
+                    # Format: entity_id = "Friendly Name" [state]
+                    # This makes it clear which entity_id to use
+                    lines.append(f"    {e['entity_id']} = \"{e['name']}\" [{e['state']}]")
 
             # Print entities without area
             if no_area:
                 lines.append("  [No Area Assigned]")
                 for e in sorted(no_area, key=lambda x: x["name"]):
-                    alias_str = f" (aliases: {', '.join(e['aliases'])})" if e["aliases"] else ""
-                    lines.append(f"    - {e['name']}: {e['entity_id']} [{e['state']}]{alias_str}")
+                    lines.append(f"    {e['entity_id']} = \"{e['name']}\" [{e['state']}]")
 
             lines.append("")
 
@@ -3578,6 +3580,10 @@ class LMStudioConversationEntity(ConversationEntity):
             area_name = arguments.get("area", "").strip()
             domain_filter = arguments.get("domain", "").strip().lower()
             device_name = arguments.get("device", "").strip()
+
+            # Log exactly what the LLM requested
+            _LOGGER.info("control_device called: entity_id=%s, device=%s, area=%s, action=%s",
+                        direct_entity_id or "(none)", device_name or "(none)", area_name or "(none)", action)
 
             if not action:
                 return {"error": "No action specified."}
