@@ -405,6 +405,8 @@ class LMStudioConversationEntity(ConversationEntity):
             self.client = AsyncOpenAI(
                 base_url=self.base_url,
                 api_key=self.api_key if self.api_key else "ollama",  # Ollama doesn't require auth
+                timeout=60.0,  # 60 second timeout to prevent hanging
+                max_retries=2,  # Retry failed requests up to 2 times
             )
         else:
             # For Anthropic and Google, we'll use aiohttp directly
@@ -422,6 +424,8 @@ class LMStudioConversationEntity(ConversationEntity):
             self.cloud_fallback_client = AsyncOpenAI(
                 base_url=cloud_base_url,
                 api_key=self.cloud_fallback_api_key,
+                timeout=60.0,  # 60 second timeout
+                max_retries=2,
             )
         else:
             self.cloud_fallback_client = None
@@ -1453,37 +1457,43 @@ class LMStudioConversationEntity(ConversationEntity):
                         f"Original error: {auth_err}"
                     ) from auth_err
                 raise
-            
-            async for chunk in stream:
-                if not chunk.choices:
-                    continue
-                
-                delta = chunk.choices[0].delta
-                
-                if delta.content:
-                    accumulated_content += delta.content
-                    full_response += delta.content
-                
-                if delta.tool_calls:
-                    for tc_delta in delta.tool_calls:
-                        if tc_delta.index is not None:
-                            while len(tool_calls_buffer) <= tc_delta.index:
-                                tool_calls_buffer.append({
-                                    "id": None,
-                                    "type": "function",
-                                    "function": {"name": "", "arguments": ""}
-                                })
-                            
-                            current = tool_calls_buffer[tc_delta.index]
-                            
-                            if tc_delta.id:
-                                current["id"] = tc_delta.id
-                            
-                            if tc_delta.function:
-                                if tc_delta.function.name:
-                                    current["function"]["name"] += tc_delta.function.name
-                                if tc_delta.function.arguments:
-                                    current["function"]["arguments"] += tc_delta.function.arguments
+
+            # Use async context manager to ensure stream is properly closed
+            # This prevents connection pool exhaustion on subsequent requests
+            try:
+                async for chunk in stream:
+                    if not chunk.choices:
+                        continue
+
+                    delta = chunk.choices[0].delta
+
+                    if delta.content:
+                        accumulated_content += delta.content
+                        full_response += delta.content
+
+                    if delta.tool_calls:
+                        for tc_delta in delta.tool_calls:
+                            if tc_delta.index is not None:
+                                while len(tool_calls_buffer) <= tc_delta.index:
+                                    tool_calls_buffer.append({
+                                        "id": None,
+                                        "type": "function",
+                                        "function": {"name": "", "arguments": ""}
+                                    })
+
+                                current = tool_calls_buffer[tc_delta.index]
+
+                                if tc_delta.id:
+                                    current["id"] = tc_delta.id
+
+                                if tc_delta.function:
+                                    if tc_delta.function.name:
+                                        current["function"]["name"] += tc_delta.function.name
+                                    if tc_delta.function.arguments:
+                                        current["function"]["arguments"] += tc_delta.function.arguments
+            finally:
+                # Ensure stream is closed to release connection back to pool
+                await stream.close()
             
             valid_tool_calls = [tc for tc in tool_calls_buffer if tc.get("id") and tc.get("function", {}).get("name")]
             
