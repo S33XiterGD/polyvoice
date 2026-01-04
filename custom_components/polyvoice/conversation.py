@@ -3577,9 +3577,16 @@ class LMStudioConversationEntity(ConversationEntity):
 
                     # Search Music Assistant for playlists
                     try:
+                        # Get Music Assistant config entry ID (required for search)
+                        ma_entries = self.hass.config_entries.async_entries("music_assistant")
+                        if not ma_entries:
+                            return {"error": "Music Assistant integration not found"}
+                        ma_config_entry_id = ma_entries[0].entry_id
+
                         search_result = await self.hass.services.async_call(
                             "music_assistant", "search",
                             {
+                                "config_entry_id": ma_config_entry_id,
                                 "name": query,
                                 "media_type": ["playlist"],
                                 "limit": 5
