@@ -20,7 +20,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, MATCH_ALL
 from homeassistant.core import HomeAssistant
 from homeassistant.components.camera import async_get_image
-from homeassistant.helpers import intent, entity_registry as er
+from homeassistant.helpers import intent, entity_registry as er, area_registry as ar, device_registry as dr
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import ulid, dt as dt_util
@@ -637,14 +637,35 @@ class LMStudioConversationEntity(ConversationEntity):
 
             filtered_lines.append(line)
 
-        # Add LLM device control instructions when native intents are disabled
+        # Add LLM device control instructions and FULL device list when native intents are disabled
         if not self.use_native_intents:
             filtered_lines.append("")
-            filtered_lines.append("DEVICE CONTROL (Pure LLM Mode):")
-            filtered_lines.append("- You have FULL control over all smart home devices (lights, switches, locks, covers, fans, etc.)")
-            filtered_lines.append("- Use the control_device tool to turn devices on/off, lock/unlock, open/close")
-            filtered_lines.append("- Be flexible with device names - understand variations like 'kitchen lights', 'the kitchen light', 'lights in kitchen'")
-            filtered_lines.append("- For ambiguous commands like 'make it dark' or 'I'm cold', use context to control appropriate devices")
+            filtered_lines.append("=" * 60)
+            filtered_lines.append("PURE LLM MODE - FULL SMART HOME CONTROL")
+            filtered_lines.append("=" * 60)
+            filtered_lines.append("")
+            filtered_lines.append("You have COMPLETE control over this smart home. Use the control_device tool with:")
+            filtered_lines.append("- entity_id: The exact entity ID (e.g., 'light.kitchen_light') - PREFERRED for accuracy")
+            filtered_lines.append("- OR device: A fuzzy device name (e.g., 'kitchen light') - will attempt to match")
+            filtered_lines.append("")
+            filtered_lines.append("ACTIONS:")
+            filtered_lines.append("- turn_on / turn_off / toggle - for lights, switches, fans, etc.")
+            filtered_lines.append("- lock / unlock - for locks")
+            filtered_lines.append("- open / close - for covers (garage doors, blinds)")
+            filtered_lines.append("- brightness (0-100) - optional for lights")
+            filtered_lines.append("")
+            filtered_lines.append("TIPS:")
+            filtered_lines.append("- When user says a room name, control ALL lights in that room/area")
+            filtered_lines.append("- 'Make it dark' = turn off lights in the current context")
+            filtered_lines.append("- 'Lock up' or 'secure the house' = lock all locks")
+            filtered_lines.append("- 'Good night' = common bedtime routine (turn off lights, lock doors)")
+            filtered_lines.append("- Use entity_id when you know the exact device, use device name for fuzzy matching")
+            filtered_lines.append("")
+
+            # Inject the FULL device list
+            device_list = self._discover_all_devices()
+            filtered_lines.append(device_list)
+            filtered_lines.append("")
 
         return '\n'.join(filtered_lines)
 
@@ -697,6 +718,244 @@ class LMStudioConversationEntity(ConversationEntity):
         self._tokens_used["input"] += input_tokens
         self._tokens_used["output"] += output_tokens
         self._update_usage_sensors()
+
+    def _discover_all_devices(self) -> str:
+        """Discover ALL controllable devices from Home Assistant.
+
+        Returns a comprehensive, structured list of all devices organized by domain,
+        including entity IDs, friendly names, areas, and current states.
+        This enables the LLM to have complete knowledge of the smart home.
+        """
+        # Controllable domains we care about
+        controllable_domains = {
+            "light": "Lights",
+            "switch": "Switches",
+            "fan": "Fans",
+            "lock": "Locks",
+            "cover": "Covers (Garage Doors, Blinds, etc.)",
+            "climate": "Thermostats/HVAC",
+            "media_player": "Media Players",
+            "vacuum": "Vacuums",
+            "scene": "Scenes",
+            "script": "Scripts",
+            "automation": "Automations",
+            "input_boolean": "Input Booleans (Virtual Switches)",
+            "button": "Buttons",
+            "siren": "Sirens/Alarms",
+            "humidifier": "Humidifiers",
+        }
+
+        # Status-only domains (can check but not control via control_device)
+        status_domains = {
+            "binary_sensor": "Binary Sensors",
+            "sensor": "Sensors",
+            "person": "People/Presence",
+            "device_tracker": "Device Trackers",
+            "weather": "Weather",
+            "sun": "Sun",
+            "zone": "Zones",
+        }
+
+        # Get registries
+        ent_reg = er.async_get(self.hass)
+        area_reg = ar.async_get(self.hass)
+        dev_reg = dr.async_get(self.hass)
+
+        # Build area lookup
+        area_names = {area.id: area.name for area in area_reg.async_list_areas()}
+
+        # Build device to area lookup
+        device_areas = {}
+        for device in dev_reg.devices.values():
+            if device.area_id:
+                device_areas[device.id] = area_names.get(device.area_id, "Unknown Area")
+
+        # Organize entities by domain and area
+        devices_by_domain = {}
+
+        for state in self.hass.states.async_all():
+            entity_id = state.entity_id
+            domain = entity_id.split(".")[0]
+
+            # Skip unavailable/unknown entities
+            if state.state in ("unavailable", "unknown"):
+                continue
+
+            # Get entity registry entry for more info
+            entity_entry = ent_reg.async_get(entity_id)
+
+            # Skip hidden or disabled entities
+            if entity_entry:
+                if entity_entry.hidden_by or entity_entry.disabled_by:
+                    continue
+
+            # Get friendly name
+            friendly_name = state.attributes.get("friendly_name", entity_id.split(".")[-1])
+
+            # Get area (from entity or device)
+            area = None
+            if entity_entry:
+                if entity_entry.area_id:
+                    area = area_names.get(entity_entry.area_id)
+                elif entity_entry.device_id:
+                    area = device_areas.get(entity_entry.device_id)
+
+            # Get current state in human-readable form
+            current_state = state.state
+            if domain == "light":
+                brightness = state.attributes.get("brightness")
+                if current_state == "on" and brightness:
+                    pct = round(brightness / 255 * 100)
+                    current_state = f"on ({pct}%)"
+            elif domain == "cover":
+                position = state.attributes.get("current_position")
+                if position is not None:
+                    current_state = f"{current_state} ({position}%)"
+            elif domain == "climate":
+                temp = state.attributes.get("temperature")
+                current_temp = state.attributes.get("current_temperature")
+                if temp:
+                    current_state = f"{current_state}, set to {temp}°"
+                if current_temp:
+                    current_state += f", currently {current_temp}°"
+            elif domain == "media_player":
+                media_title = state.attributes.get("media_title")
+                if media_title and current_state == "playing":
+                    current_state = f"playing: {media_title[:30]}"
+            elif domain == "lock":
+                current_state = "LOCKED" if current_state == "locked" else "UNLOCKED"
+            elif domain in ("binary_sensor", "input_boolean"):
+                if "door" in entity_id or "window" in entity_id or "gate" in entity_id:
+                    current_state = "OPEN" if current_state == "on" else "CLOSED"
+                elif "motion" in entity_id or "occupancy" in entity_id:
+                    current_state = "DETECTED" if current_state == "on" else "clear"
+                elif "lock" in entity_id:
+                    current_state = "LOCKED" if current_state == "on" else "UNLOCKED"
+
+            # Check if it's controllable or status-only
+            if domain in controllable_domains:
+                domain_label = controllable_domains[domain]
+                is_controllable = True
+            elif domain in status_domains:
+                domain_label = status_domains[domain]
+                is_controllable = False
+            else:
+                continue  # Skip other domains
+
+            # Add to organized dict
+            if domain_label not in devices_by_domain:
+                devices_by_domain[domain_label] = {"controllable": is_controllable, "entities": []}
+
+            # Check for aliases in device_aliases config
+            aliases = []
+            for alias, alias_entity_id in self.device_aliases.items():
+                if alias_entity_id == entity_id:
+                    aliases.append(alias)
+
+            entity_info = {
+                "entity_id": entity_id,
+                "name": friendly_name,
+                "area": area,
+                "state": current_state,
+                "aliases": aliases,
+            }
+            devices_by_domain[domain_label]["entities"].append(entity_info)
+
+        # Build the comprehensive device list string
+        lines = []
+        lines.append("=" * 60)
+        lines.append("COMPLETE SMART HOME DEVICE LIST")
+        lines.append("=" * 60)
+        lines.append("")
+
+        # First, controllable devices
+        lines.append(">>> CONTROLLABLE DEVICES (you can turn on/off, lock/unlock, open/close):")
+        lines.append("")
+
+        for domain_label, data in sorted(devices_by_domain.items()):
+            if not data["controllable"]:
+                continue
+            entities = data["entities"]
+            if not entities:
+                continue
+
+            lines.append(f"### {domain_label} ({len(entities)} devices) ###")
+
+            # Group by area
+            by_area = {}
+            no_area = []
+            for e in entities:
+                if e["area"]:
+                    if e["area"] not in by_area:
+                        by_area[e["area"]] = []
+                    by_area[e["area"]].append(e)
+                else:
+                    no_area.append(e)
+
+            # Print by area
+            for area_name in sorted(by_area.keys()):
+                lines.append(f"  [{area_name}]")
+                for e in sorted(by_area[area_name], key=lambda x: x["name"]):
+                    alias_str = f" (aliases: {', '.join(e['aliases'])})" if e["aliases"] else ""
+                    lines.append(f"    - {e['name']}: {e['entity_id']} [{e['state']}]{alias_str}")
+
+            # Print entities without area
+            if no_area:
+                lines.append("  [No Area Assigned]")
+                for e in sorted(no_area, key=lambda x: x["name"]):
+                    alias_str = f" (aliases: {', '.join(e['aliases'])})" if e["aliases"] else ""
+                    lines.append(f"    - {e['name']}: {e['entity_id']} [{e['state']}]{alias_str}")
+
+            lines.append("")
+
+        # Then, status-only devices
+        lines.append(">>> STATUS-ONLY DEVICES (you can check status but not control):")
+        lines.append("")
+
+        for domain_label, data in sorted(devices_by_domain.items()):
+            if data["controllable"]:
+                continue
+            entities = data["entities"]
+            if not entities:
+                continue
+
+            # Limit sensors to avoid overwhelming (show first 50)
+            if len(entities) > 50:
+                lines.append(f"### {domain_label} ({len(entities)} total, showing first 50) ###")
+                entities = entities[:50]
+            else:
+                lines.append(f"### {domain_label} ({len(entities)} devices) ###")
+
+            # Group by area
+            by_area = {}
+            no_area = []
+            for e in entities:
+                if e["area"]:
+                    if e["area"] not in by_area:
+                        by_area[e["area"]] = []
+                    by_area[e["area"]].append(e)
+                else:
+                    no_area.append(e)
+
+            # Print by area
+            for area_name in sorted(by_area.keys()):
+                lines.append(f"  [{area_name}]")
+                for e in sorted(by_area[area_name], key=lambda x: x["name"]):
+                    lines.append(f"    - {e['name']}: {e['entity_id']} [{e['state']}]")
+
+            # Print entities without area
+            if no_area:
+                lines.append("  [No Area Assigned]")
+                for e in sorted(no_area, key=lambda x: x["name"]):
+                    lines.append(f"    - {e['name']}: {e['entity_id']} [{e['state']}]")
+
+            lines.append("")
+
+        lines.append("=" * 60)
+        lines.append("END OF DEVICE LIST")
+        lines.append("=" * 60)
+
+        return "\n".join(lines)
 
     def _build_tools(self) -> list[dict]:
         """Build the tools list based on enabled features."""
@@ -1000,25 +1259,43 @@ class LMStudioConversationEntity(ConversationEntity):
                 "type": "function",
                 "function": {
                     "name": "control_device",
-                    "description": "Control any smart home device: lights, switches, locks, covers, fans, etc. Use for: 'turn on/off', 'lock/unlock', 'open/close', 'toggle'. Understands fuzzy device names.",
+                    "description": "Control smart home devices. PREFERRED: Use entity_id for accuracy. Can control single device or multiple devices at once. Use for: 'turn on/off', 'lock/unlock', 'open/close', 'toggle'.",
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "entity_id": {
+                                "type": "string",
+                                "description": "PREFERRED: Exact entity ID from the device list (e.g., 'light.kitchen_light', 'lock.front_door'). Use this when you know the exact entity."
+                            },
+                            "entity_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Multiple entity IDs to control at once (e.g., ['light.kitchen', 'light.living_room'] for 'turn on downstairs lights')"
+                            },
                             "device": {
                                 "type": "string",
-                                "description": "Device name as the user said it. Examples: 'kitchen light', 'front door', 'garage', 'bedroom fan', 'living room'"
+                                "description": "FALLBACK: Fuzzy device name if entity_id unknown. Examples: 'kitchen light', 'front door'"
+                            },
+                            "area": {
+                                "type": "string",
+                                "description": "Control ALL devices of a type in an area. Examples: 'Kitchen', 'Living Room', 'Bedroom'"
+                            },
+                            "domain": {
+                                "type": "string",
+                                "enum": ["light", "switch", "lock", "cover", "fan", "all"],
+                                "description": "Device type filter when using area. 'all' controls all devices in area."
                             },
                             "action": {
                                 "type": "string",
                                 "enum": ["turn_on", "turn_off", "toggle", "lock", "unlock", "open", "close"],
-                                "description": "Action to perform on the device"
+                                "description": "Action to perform"
                             },
                             "brightness": {
                                 "type": "integer",
-                                "description": "Brightness level 0-100 for lights (optional)"
+                                "description": "Brightness 0-100 for lights (optional)"
                             }
                         },
-                        "required": ["device", "action"]
+                        "required": ["action"]
                     }
                 }
             })
@@ -3206,24 +3483,19 @@ class LMStudioConversationEntity(ConversationEntity):
             }
 
         elif tool_name == "control_device":
-            # Control any smart home device (Pure LLM Mode)
-            device = arguments.get("device", "").strip()
+            # Control smart home devices (Pure LLM Mode) - supports multiple input methods
             action = arguments.get("action", "").strip().lower()
             brightness = arguments.get("brightness")
 
-            if not device:
-                return {"error": "No device specified. Please say which device to control."}
+            # Input methods (in priority order)
+            direct_entity_id = arguments.get("entity_id", "").strip()
+            entity_ids_list = arguments.get("entity_ids", [])
+            area_name = arguments.get("area", "").strip()
+            domain_filter = arguments.get("domain", "").strip().lower()
+            device_name = arguments.get("device", "").strip()
 
             if not action:
                 return {"error": "No action specified. Use turn_on, turn_off, toggle, lock, unlock, open, or close."}
-
-            # Find the entity using fuzzy matching
-            entity_id, friendly_name = find_entity_by_name(self.hass, device, self.device_aliases)
-
-            if not entity_id:
-                return {"error": f"Could not find a device matching '{device}'. Try using the exact name or set up a device alias."}
-
-            domain = entity_id.split(".")[0]
 
             # Map actions to appropriate HA services based on domain
             service_map = {
@@ -3236,57 +3508,184 @@ class LMStudioConversationEntity(ConversationEntity):
                 "automation": {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
                 "scene": {"turn_on": "turn_on"},
                 "script": {"turn_on": "turn_on", "turn_off": "turn_off"},
+                "vacuum": {"turn_on": "start", "turn_off": "return_to_base"},
+                "media_player": {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
             }
 
-            # Get the service for this domain and action
-            domain_services = service_map.get(domain, {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"})
-            service = domain_services.get(action)
+            action_words = {
+                "turn_on": "turned on",
+                "turn_off": "turned off",
+                "toggle": "toggled",
+                "lock": "locked",
+                "unlock": "unlocked",
+                "open_cover": "opened",
+                "close_cover": "closed",
+                "start": "started",
+                "return_to_base": "sent home",
+            }
 
-            if not service:
-                return {"error": f"Action '{action}' is not supported for {domain} devices."}
+            # Collect entities to control
+            entities_to_control = []
 
-            try:
-                # Build service data
-                service_data = {"entity_id": entity_id}
+            # Method 1: Direct entity_id (highest priority)
+            if direct_entity_id:
+                state = self.hass.states.get(direct_entity_id)
+                if state:
+                    friendly_name = state.attributes.get("friendly_name", direct_entity_id)
+                    entities_to_control.append((direct_entity_id, friendly_name))
+                else:
+                    return {"error": f"Entity '{direct_entity_id}' not found in Home Assistant."}
 
-                # Add brightness for lights if specified
-                if domain == "light" and brightness is not None and action == "turn_on":
-                    service_data["brightness_pct"] = max(0, min(100, brightness))
+            # Method 2: Multiple entity_ids
+            elif entity_ids_list:
+                for eid in entity_ids_list:
+                    eid = eid.strip()
+                    state = self.hass.states.get(eid)
+                    if state:
+                        friendly_name = state.attributes.get("friendly_name", eid)
+                        entities_to_control.append((eid, friendly_name))
+                    else:
+                        _LOGGER.warning("Entity %s not found, skipping", eid)
 
-                # Call the service
-                await self.hass.services.async_call(
-                    domain, service, service_data, blocking=True
-                )
+            # Method 3: Area-based control
+            elif area_name:
+                # Get registries
+                ent_reg = er.async_get(self.hass)
+                area_reg = ar.async_get(self.hass)
+                dev_reg = dr.async_get(self.hass)
 
-                # Build response
-                action_words = {
-                    "turn_on": "turned on",
-                    "turn_off": "turned off",
-                    "toggle": "toggled",
-                    "lock": "locked",
-                    "unlock": "unlocked",
-                    "open_cover": "opened",
-                    "close_cover": "closed",
-                }
-                action_word = action_words.get(service, action)
+                # Find area by name (case-insensitive)
+                target_area_id = None
+                for area in area_reg.async_list_areas():
+                    if area.name.lower() == area_name.lower():
+                        target_area_id = area.id
+                        break
 
-                response = f"I've {action_word} the {friendly_name}."
-                if brightness is not None and domain == "light" and action == "turn_on":
-                    response = f"I've {action_word} the {friendly_name} at {brightness}% brightness."
+                if not target_area_id:
+                    # Try partial match
+                    for area in area_reg.async_list_areas():
+                        if area_name.lower() in area.name.lower() or area.name.lower() in area_name.lower():
+                            target_area_id = area.id
+                            break
 
-                _LOGGER.info("Device control: %s -> %s.%s on %s (%s)", device, domain, service, friendly_name, entity_id)
+                if not target_area_id:
+                    return {"error": f"Could not find area '{area_name}'. Check the device list for valid area names."}
 
-                return {
+                # Build device to area lookup
+                device_areas = {}
+                for device in dev_reg.devices.values():
+                    if device.area_id == target_area_id:
+                        device_areas[device.id] = True
+
+                # Find all entities in this area
+                controllable_domains = ["light", "switch", "fan", "lock", "cover", "media_player", "vacuum", "scene", "script", "input_boolean"]
+
+                if domain_filter and domain_filter != "all":
+                    controllable_domains = [domain_filter]
+
+                for state in self.hass.states.async_all():
+                    eid = state.entity_id
+                    domain = eid.split(".")[0]
+
+                    if domain not in controllable_domains:
+                        continue
+
+                    if state.state in ("unavailable", "unknown"):
+                        continue
+
+                    entity_entry = ent_reg.async_get(eid)
+                    if not entity_entry:
+                        continue
+
+                    # Check if entity is in target area (directly or via device)
+                    in_area = False
+                    if entity_entry.area_id == target_area_id:
+                        in_area = True
+                    elif entity_entry.device_id and entity_entry.device_id in device_areas:
+                        in_area = True
+
+                    if in_area:
+                        friendly_name = state.attributes.get("friendly_name", eid)
+                        entities_to_control.append((eid, friendly_name))
+
+                if not entities_to_control:
+                    return {"error": f"No controllable devices found in area '{area_name}' with domain filter '{domain_filter or 'all'}'."}
+
+            # Method 4: Fuzzy device name matching (fallback)
+            elif device_name:
+                found_entity_id, friendly_name = find_entity_by_name(self.hass, device_name, self.device_aliases)
+                if found_entity_id:
+                    entities_to_control.append((found_entity_id, friendly_name))
+                else:
+                    return {"error": f"Could not find a device matching '{device_name}'. Try using the exact entity_id from the device list."}
+
+            else:
+                return {"error": "No device specified. Provide entity_id, entity_ids, area, or device name."}
+
+            # Execute control on all collected entities
+            controlled = []
+            failed = []
+
+            for entity_id, friendly_name in entities_to_control:
+                domain = entity_id.split(".")[0]
+
+                # Get the service for this domain and action
+                domain_services = service_map.get(domain, {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"})
+                service = domain_services.get(action)
+
+                if not service:
+                    failed.append(f"{friendly_name} (unsupported action)")
+                    continue
+
+                try:
+                    # Build service data
+                    service_data = {"entity_id": entity_id}
+
+                    # Add brightness for lights if specified
+                    if domain == "light" and brightness is not None and action == "turn_on":
+                        service_data["brightness_pct"] = max(0, min(100, brightness))
+
+                    # Call the service
+                    await self.hass.services.async_call(
+                        domain, service, service_data, blocking=True
+                    )
+
+                    action_word = action_words.get(service, action)
+                    controlled.append(friendly_name)
+                    _LOGGER.info("Device control: %s.%s on %s (%s)", domain, service, friendly_name, entity_id)
+
+                except Exception as err:
+                    _LOGGER.error("Error controlling device %s: %s", entity_id, err)
+                    failed.append(f"{friendly_name} ({str(err)[:30]})")
+
+            # Build response
+            if controlled:
+                if len(controlled) == 1:
+                    action_word = action_words.get(service, action)
+                    response = f"I've {action_word} the {controlled[0]}."
+                    if brightness is not None and action == "turn_on":
+                        response = f"I've {action_word} the {controlled[0]} at {brightness}% brightness."
+                else:
+                    action_word = action_words.get(service, action)
+                    response = f"I've {action_word} {len(controlled)} devices: {', '.join(controlled[:5])}"
+                    if len(controlled) > 5:
+                        response += f" and {len(controlled) - 5} more"
+                    response += "."
+
+                result = {
                     "success": True,
-                    "device": friendly_name,
-                    "action": action,
-                    "entity_id": entity_id,
+                    "controlled_count": len(controlled),
+                    "controlled_devices": controlled,
                     "response_text": response
                 }
 
-            except Exception as err:
-                _LOGGER.error("Error controlling device %s: %s", entity_id, err, exc_info=True)
-                return {"error": f"Failed to control {friendly_name}: {str(err)}"}
+                if failed:
+                    result["failed_count"] = len(failed)
+                    result["failed_devices"] = failed
+
+                return result
+            else:
+                return {"error": f"Failed to control any devices. Failures: {', '.join(failed)}"}
 
         elif tool_name == "get_device_history":
             # Get HISTORICAL state changes from HA Recorder
