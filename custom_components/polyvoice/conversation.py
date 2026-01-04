@@ -646,10 +646,10 @@ class LMStudioConversationEntity(ConversationEntity):
             filtered_lines.append("")
             filtered_lines.append("RULES:")
             filtered_lines.append("1. Match DEVICE TYPE: shades/blinds/curtains = cover.xxx, lights = light.xxx")
-            filtered_lines.append("2. Match ROOM NAME: 'living room' -> 'living_room', 'bedroom' -> 'master' or 'bedroom'")
+            filtered_lines.append("2. CHECK ALIASES: Devices show (aka: ...) - match user words to these aliases!")
             filtered_lines.append("3. ROOM ALIASES: bedroom = master bedroom = master")
-            filtered_lines.append("4. MULTIPLE SHADES: If room has shade_1, shade_2, shade_3 - use entity_ids array for all")
-            filtered_lines.append("5. Use entity_id from device list below")
+            filtered_lines.append("4. MULTIPLE DEVICES: If room has _1, _2, _3 - use entity_ids array for all")
+            filtered_lines.append("5. ALWAYS try control_device with entity_id from device list - never give up!")
             filtered_lines.append("")
             filtered_lines.append("-" * 50)
             filtered_lines.append("QUICK REFERENCE - CONTROL_DEVICE ACTIONS")
@@ -896,10 +896,18 @@ class LMStudioConversationEntity(ConversationEntity):
             if domain_label not in devices_by_domain:
                 devices_by_domain[domain_label] = {"controllable": is_controllable, "entities": []}
 
-            # Check for aliases in device_aliases config
+            # Collect aliases from BOTH sources:
+            # 1. HA entity registry aliases (built-in HA feature)
+            # 2. Custom device_aliases config
             aliases = []
+
+            # Get HA entity registry aliases FIRST (this is what user has set up!)
+            if entity_entry and entity_entry.aliases:
+                aliases.extend(list(entity_entry.aliases))
+
+            # Also check custom device_aliases config
             for alias, alias_entity_id in self.device_aliases.items():
-                if alias_entity_id == entity_id:
+                if alias_entity_id == entity_id and alias not in aliases:
                     aliases.append(alias)
 
             entity_info = {
@@ -946,15 +954,21 @@ class LMStudioConversationEntity(ConversationEntity):
             for area_name in sorted(by_area.keys()):
                 lines.append(f"  [{area_name}]")
                 for e in sorted(by_area[area_name], key=lambda x: x["name"]):
-                    # Format: entity_id = "Friendly Name" [state]
-                    # This makes it clear which entity_id to use
-                    lines.append(f"    {e['entity_id']} = \"{e['name']}\" [{e['state']}]")
+                    # Format: entity_id = "Friendly Name" [state] (aka: alias1, alias2)
+                    # This makes it clear which entity_id to use AND shows aliases
+                    line = f"    {e['entity_id']} = \"{e['name']}\" [{e['state']}]"
+                    if e.get("aliases"):
+                        line += f" (aka: {', '.join(e['aliases'])})"
+                    lines.append(line)
 
             # Print entities without area
             if no_area:
                 lines.append("  [No Area Assigned]")
                 for e in sorted(no_area, key=lambda x: x["name"]):
-                    lines.append(f"    {e['entity_id']} = \"{e['name']}\" [{e['state']}]")
+                    line = f"    {e['entity_id']} = \"{e['name']}\" [{e['state']}]"
+                    if e.get("aliases"):
+                        line += f" (aka: {', '.join(e['aliases'])})"
+                    lines.append(line)
 
             lines.append("")
 
