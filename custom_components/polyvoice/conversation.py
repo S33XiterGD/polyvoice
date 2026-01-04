@@ -659,7 +659,20 @@ class LMStudioConversationEntity(ConversationEntity):
             if not self.enable_calendar and 'get_calendar_events' in line_lower:
                 continue
 
+            # Skip "let native HA handle" instructions when in pure LLM mode
+            if not self.use_native_intents and 'native' in line_lower and 'handle' in line_lower:
+                continue
+
             filtered_lines.append(line)
+
+        # Add LLM device control instructions when native intents are disabled
+        if not self.use_native_intents:
+            filtered_lines.append("")
+            filtered_lines.append("DEVICE CONTROL (Pure LLM Mode):")
+            filtered_lines.append("- You have FULL control over all smart home devices (lights, switches, locks, covers, fans, etc.)")
+            filtered_lines.append("- Use the control_device tool to turn devices on/off, lock/unlock, open/close")
+            filtered_lines.append("- Be flexible with device names - understand variations like 'kitchen lights', 'the kitchen light', 'lights in kitchen'")
+            filtered_lines.append("- For ambiguous commands like 'make it dark' or 'I'm cold', use context to control appropriate devices")
 
         return '\n'.join(filtered_lines)
 
@@ -1005,6 +1018,35 @@ class LMStudioConversationEntity(ConversationEntity):
                             "shuffle": {"type": "boolean", "description": "Enable shuffle mode"}
                         },
                         "required": ["action"]
+                    }
+                }
+            })
+
+        # ===== DEVICE CONTROL (Pure LLM Mode - when native intents disabled) =====
+        if not self.use_native_intents:
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "control_device",
+                    "description": "Control any smart home device: lights, switches, locks, covers, fans, etc. Use for: 'turn on/off', 'lock/unlock', 'open/close', 'toggle'. Understands fuzzy device names.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "device": {
+                                "type": "string",
+                                "description": "Device name as the user said it. Examples: 'kitchen light', 'front door', 'garage', 'bedroom fan', 'living room'"
+                            },
+                            "action": {
+                                "type": "string",
+                                "enum": ["turn_on", "turn_off", "toggle", "lock", "unlock", "open", "close"],
+                                "description": "Action to perform on the device"
+                            },
+                            "brightness": {
+                                "type": "integer",
+                                "description": "Brightness level 0-100 for lights (optional)"
+                            }
+                        },
+                        "required": ["device", "action"]
                     }
                 }
             })
@@ -3250,7 +3292,90 @@ class LMStudioConversationEntity(ConversationEntity):
                 "status": status,
                 "entity_id": entity_id
             }
-        
+
+        elif tool_name == "control_device":
+            # Control any smart home device (Pure LLM Mode)
+            device = arguments.get("device", "").strip()
+            action = arguments.get("action", "").strip().lower()
+            brightness = arguments.get("brightness")
+
+            if not device:
+                return {"error": "No device specified. Please say which device to control."}
+
+            if not action:
+                return {"error": "No action specified. Use turn_on, turn_off, toggle, lock, unlock, open, or close."}
+
+            # Find the entity using fuzzy matching
+            entity_id, friendly_name = find_entity_by_name(self.hass, device, self.device_aliases)
+
+            if not entity_id:
+                return {"error": f"Could not find a device matching '{device}'. Try using the exact name or set up a device alias."}
+
+            domain = entity_id.split(".")[0]
+
+            # Map actions to appropriate HA services based on domain
+            service_map = {
+                "light": {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
+                "switch": {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
+                "fan": {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
+                "lock": {"lock": "lock", "unlock": "unlock", "turn_on": "lock", "turn_off": "unlock"},
+                "cover": {"open": "open_cover", "close": "close_cover", "turn_on": "open_cover", "turn_off": "close_cover", "toggle": "toggle"},
+                "input_boolean": {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
+                "automation": {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
+                "scene": {"turn_on": "turn_on"},
+                "script": {"turn_on": "turn_on", "turn_off": "turn_off"},
+            }
+
+            # Get the service for this domain and action
+            domain_services = service_map.get(domain, {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"})
+            service = domain_services.get(action)
+
+            if not service:
+                return {"error": f"Action '{action}' is not supported for {domain} devices."}
+
+            try:
+                # Build service data
+                service_data = {"entity_id": entity_id}
+
+                # Add brightness for lights if specified
+                if domain == "light" and brightness is not None and action == "turn_on":
+                    service_data["brightness_pct"] = max(0, min(100, brightness))
+
+                # Call the service
+                await self.hass.services.async_call(
+                    domain, service, service_data, blocking=True
+                )
+
+                # Build response
+                action_words = {
+                    "turn_on": "turned on",
+                    "turn_off": "turned off",
+                    "toggle": "toggled",
+                    "lock": "locked",
+                    "unlock": "unlocked",
+                    "open_cover": "opened",
+                    "close_cover": "closed",
+                }
+                action_word = action_words.get(service, action)
+
+                response = f"I've {action_word} the {friendly_name}."
+                if brightness is not None and domain == "light" and action == "turn_on":
+                    response = f"I've {action_word} the {friendly_name} at {brightness}% brightness."
+
+                _LOGGER.info("Device control: %s -> %s.%s on %s (%s)", device, domain, service, friendly_name, entity_id)
+
+                return {
+                    "success": True,
+                    "device": friendly_name,
+                    "action": action,
+                    "entity_id": entity_id,
+                    "response_text": response
+                }
+
+            except Exception as err:
+                _LOGGER.error("Error controlling device %s: %s", entity_id, err, exc_info=True)
+                return {"error": f"Failed to control {friendly_name}: {str(err)}"}
+
         elif tool_name == "get_device_history":
             # Get HISTORICAL state changes from HA Recorder
             device = arguments.get("device", "").strip()
