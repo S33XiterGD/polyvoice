@@ -1380,7 +1380,7 @@ class LMStudioConversationEntity(ConversationEntity):
                             "action": {
                                 "type": "string",
                                 "enum": ["turn_on", "turn_off", "toggle", "lock", "unlock", "open", "close", "stop", "preset", "favorite", "set_position", "play", "pause", "next", "previous", "volume_up", "volume_down", "set_volume", "mute", "unmute", "set_temperature", "start", "dock", "locate", "return_home", "activate"],
-                                "description": "Action to perform"
+                                "description": "Action to perform. For BLINDS/SHADES: 'open'=raise, 'close'=lower, 'stop'=halt movement, 'favorite' or 'preset'=go to saved position"
                             },
                             "brightness": {
                                 "type": "integer",
@@ -3908,29 +3908,48 @@ class LMStudioConversationEntity(ConversationEntity):
 
                     # Handle cover preset/favorite position
                     if domain == "cover" and action == "preset":
-                        # First, try to find a button entity for this cover's favorite/preset
+                        # First, try to find a button from user's configured favorite buttons
                         cover_name = entity_id.split(".")[-1]
-                        possible_buttons = [
-                            f"button.{cover_name}_my_position",  # Common pattern (e.g., living_room_shade_my_position)
-                            f"button.{cover_name}_favorite_position",
-                            f"button.{cover_name}_preset_position",
-                            f"button.{cover_name}_favorite",
-                            f"button.{cover_name}_preset",
-                            f"button.{cover_name}_my",
-                        ]
-
                         button_found = False
-                        for button_id in possible_buttons:
-                            button_state = self.hass.states.get(button_id)
-                            if button_state:
-                                # Found a preset button - press it
-                                await self.hass.services.async_call(
-                                    "button", "press", {"entity_id": button_id}, blocking=True
-                                )
-                                button_found = True
-                                _LOGGER.info("Pressed preset button %s for cover %s", button_id, entity_id)
-                                controlled.append(friendly_name)
-                                break
+
+                        # Check configured blinds_favorite_buttons first
+                        if hasattr(self, 'blinds_favorite_buttons') and self.blinds_favorite_buttons:
+                            for button_id in self.blinds_favorite_buttons:
+                                # Match by checking if button name contains cover name
+                                button_name = button_id.split(".")[-1] if "." in button_id else button_id
+                                if cover_name in button_name or button_name.startswith(cover_name.replace("roller_blind", "").replace("shade", "").replace("blind", "").strip("_")):
+                                    button_state = self.hass.states.get(button_id)
+                                    if button_state:
+                                        await self.hass.services.async_call(
+                                            "button", "press", {"entity_id": button_id}, blocking=True
+                                        )
+                                        button_found = True
+                                        _LOGGER.info("Pressed configured preset button %s for cover %s", button_id, entity_id)
+                                        controlled.append(friendly_name)
+                                        break
+
+                        # Fall back to pattern-based search if no configured button found
+                        if not button_found:
+                            possible_buttons = [
+                                f"button.{cover_name}_my_position",  # Common pattern (e.g., living_room_shade_my_position)
+                                f"button.{cover_name}_favorite_position",
+                                f"button.{cover_name}_preset_position",
+                                f"button.{cover_name}_favorite",
+                                f"button.{cover_name}_preset",
+                                f"button.{cover_name}_my",
+                            ]
+
+                            for button_id in possible_buttons:
+                                button_state = self.hass.states.get(button_id)
+                                if button_state:
+                                    # Found a preset button - press it
+                                    await self.hass.services.async_call(
+                                        "button", "press", {"entity_id": button_id}, blocking=True
+                                    )
+                                    button_found = True
+                                    _LOGGER.info("Pressed preset button %s for cover %s", button_id, entity_id)
+                                    controlled.append(friendly_name)
+                                    break
 
                         if button_found:
                             # Button was pressed, skip the cover service call
