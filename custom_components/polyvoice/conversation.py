@@ -142,6 +142,9 @@ ALLOWED_SERVICE_DOMAINS = {
 # API timeout in seconds for external calls
 API_TIMEOUT = 15
 
+# Bad responses that indicate HA misunderstood - used to filter native intent fallback
+BAD_NATIVE_RESPONSES = frozenset(["no timers", "no timer", "don't understand", "sorry"])
+
 # CAMERA_FRIENDLY_NAMES is now imported from const.py
 
 # =============================================================================
@@ -211,54 +214,68 @@ def find_entity_by_name(hass: HomeAssistant, query: str, device_aliases: dict) -
     """
     Search for entity using device aliases first, then fall back to HA entity registry aliases.
     Returns (entity_id, friendly_name) or (None, None) if not found.
+    OPTIMIZED: Single-pass search with priority queue instead of 6 separate passes.
     """
     query_lower = query.lower().strip()
-    
-    # FIRST: Check configured device aliases (exact match)
+
+    # PRIORITY 1: Exact match in configured device aliases (O(1) dict lookup)
     if query_lower in device_aliases:
         entity_id = device_aliases[query_lower]
         state = hass.states.get(entity_id)
         friendly_name = state.attributes.get("friendly_name", query) if state else query
         return (entity_id, friendly_name)
-    
-    # SECOND: Check configured device aliases (partial match)
+
+    # Collect partial matches with priorities (lower = better)
+    partial_matches: list[tuple[int, str, str]] = []  # (priority, entity_id, name)
+
+    # PRIORITY 2: Partial match in device aliases
     for alias, entity_id in device_aliases.items():
         if query_lower in alias or alias in query_lower:
             state = hass.states.get(entity_id)
             friendly_name = state.attributes.get("friendly_name", alias) if state else alias
-            return (entity_id, friendly_name)
-    
-    # THIRD: Check HA entity registry aliases
+            return (entity_id, friendly_name)  # Return immediately for device aliases
+
+    # Single pass through entity registry for aliases + friendly names
     ent_reg = er.async_get(hass)
+    all_states = {s.entity_id: s for s in hass.states.async_all()}  # Cache states lookup
+
     for entity_entry in ent_reg.entities.values():
+        state = all_states.get(entity_entry.entity_id)
+        friendly_name = state.attributes.get("friendly_name", "") if state else ""
+
+        # Check entity registry aliases
         if entity_entry.aliases:
             for alias in entity_entry.aliases:
-                if alias.lower() == query_lower:
-                    state = hass.states.get(entity_entry.entity_id)
-                    friendly_name = state.attributes.get("friendly_name", alias) if state else alias
-                    return (entity_entry.entity_id, friendly_name)
-    
-    # FOURTH: Check HA entity registry aliases (partial match)
-    for entity_entry in ent_reg.entities.values():
-        if entity_entry.aliases:
-            for alias in entity_entry.aliases:
-                if query_lower in alias.lower() or alias.lower() in query_lower:
-                    state = hass.states.get(entity_entry.entity_id)
-                    friendly_name = state.attributes.get("friendly_name", alias) if state else alias
-                    return (entity_entry.entity_id, friendly_name)
-    
-    # FIFTH: Check friendly names (exact)
-    for state in hass.states.async_all():
-        friendly_name = state.attributes.get("friendly_name", "")
-        if friendly_name and friendly_name.lower() == query_lower:
-            return (state.entity_id, friendly_name)
-    
-    # SIXTH: Check friendly names (partial)
-    for state in hass.states.async_all():
-        friendly_name = state.attributes.get("friendly_name", "")
-        if friendly_name and query_lower in friendly_name.lower():
-            return (state.entity_id, friendly_name)
-    
+                alias_lower = alias.lower()
+                if alias_lower == query_lower:
+                    return (entity_entry.entity_id, friendly_name or alias)  # PRIORITY 3: Exact alias
+                if query_lower in alias_lower or alias_lower in query_lower:
+                    partial_matches.append((4, entity_entry.entity_id, friendly_name or alias))
+
+        # Check friendly name
+        if friendly_name:
+            fn_lower = friendly_name.lower()
+            if fn_lower == query_lower:
+                partial_matches.append((5, entity_entry.entity_id, friendly_name))  # PRIORITY 5: Exact friendly
+            elif query_lower in fn_lower:
+                partial_matches.append((6, entity_entry.entity_id, friendly_name))  # PRIORITY 6: Partial friendly
+
+    # Check states not in entity registry (rare but possible)
+    for entity_id, state in all_states.items():
+        if entity_id not in {e.entity_id for e in ent_reg.entities.values()}:
+            friendly_name = state.attributes.get("friendly_name", "")
+            if friendly_name:
+                fn_lower = friendly_name.lower()
+                if fn_lower == query_lower:
+                    partial_matches.append((5, entity_id, friendly_name))
+                elif query_lower in fn_lower:
+                    partial_matches.append((6, entity_id, friendly_name))
+
+    # Return best match by priority
+    if partial_matches:
+        partial_matches.sort(key=lambda x: x[0])
+        return (partial_matches[0][1], partial_matches[0][2])
+
     return (None, None)
 
 
@@ -297,6 +314,10 @@ class LMStudioConversationEntity(ConversationEntity):
 
         # Tools cache (built once, reused for all requests)
         self._tools = None
+
+        # System prompt cache (keyed by date since it includes current date)
+        self._cached_system_prompt: str | None = None
+        self._cached_system_prompt_date: str | None = None
 
         # Initialize config
         self._update_from_config({**config_entry.data, **config_entry.options})
@@ -501,7 +522,14 @@ class LMStudioConversationEntity(ConversationEntity):
         This prevents the LLM from trying to call tools that aren't available,
         which causes validation errors with providers like Groq that strictly
         validate tool calls against the provided tools list.
+
+        OPTIMIZED: Cached by date (only rebuilds once per day or on config change).
         """
+        # Check cache validity (date-based since we inject current date)
+        today = datetime.now().strftime("%Y-%m-%d")
+        if self._cached_system_prompt is not None and self._cached_system_prompt_date == today:
+            return self._cached_system_prompt
+
         system_prompt = self.system_prompt or ""
 
         # Inject current date
@@ -561,7 +589,10 @@ class LMStudioConversationEntity(ConversationEntity):
 
             filtered_lines.append(line)
 
-        return '\n'.join(filtered_lines)
+        # Cache the result
+        self._cached_system_prompt = '\n'.join(filtered_lines)
+        self._cached_system_prompt_date = today
+        return self._cached_system_prompt
 
     async def async_added_to_hass(self) -> None:
         """When entity is added to hass."""
@@ -1080,8 +1111,7 @@ class LMStudioConversationEntity(ConversationEntity):
                         speech = str(result.response.speech)
                 
                 # Filter out bad matches - these indicate HA misunderstood
-                bad_responses = ["no timers", "no timer", "don't understand", "sorry"]
-                if any(bad in speech.lower() for bad in bad_responses):
+                if any(bad in speech.lower() for bad in BAD_NATIVE_RESPONSES):
                     _LOGGER.debug("Filtering bad native response: %s", speech[:50])
                     return None
                     
@@ -1185,22 +1215,27 @@ class LMStudioConversationEntity(ConversationEntity):
                             tool_uses.append(block)
                     
                     if tool_uses:
-                        # Handle tool calls
+                        # Handle tool calls - PARALLEL execution for speed
                         messages.append({"role": "assistant", "content": result.get("content", [])})
-                        
+
+                        # Execute all tools in parallel
+                        tool_tasks = [
+                            self._execute_tool(tu.get("name"), tu.get("input", {}), user_input)
+                            for tu in tool_uses
+                        ]
+                        results = await asyncio.gather(*tool_tasks, return_exceptions=True)
+
                         tool_results = []
-                        for tool_use in tool_uses:
-                            tool_name = tool_use.get("name")
-                            tool_input = tool_use.get("input", {})
-                            _LOGGER.info("Tool call: %s(%s)", tool_name, tool_input)
-                            
-                            result_data = await self._execute_tool(tool_name, tool_input, user_input)
+                        for tool_use, result_data in zip(tool_uses, results):
+                            if isinstance(result_data, Exception):
+                                _LOGGER.error("Tool error: %s", result_data)
+                                result_data = {"error": str(result_data)}
                             tool_results.append({
                                 "type": "tool_result",
                                 "tool_use_id": tool_use.get("id"),
                                 "content": json.dumps(result_data)
                             })
-                        
+
                         messages.append({"role": "user", "content": tool_results})
                         continue
                     
@@ -1295,23 +1330,28 @@ class LMStudioConversationEntity(ConversationEntity):
                             function_calls.append(part["functionCall"])
                     
                     if function_calls:
-                        # Handle function calls
+                        # Handle function calls - PARALLEL execution for speed
                         contents.append({"role": "model", "parts": parts})
-                        
+
+                        # Execute all tools in parallel
+                        tool_tasks = [
+                            self._execute_tool(fc.get("name"), fc.get("args", {}), user_input)
+                            for fc in function_calls
+                        ]
+                        results = await asyncio.gather(*tool_tasks, return_exceptions=True)
+
                         function_responses = []
-                        for fc in function_calls:
-                            tool_name = fc.get("name")
-                            tool_args = fc.get("args", {})
-                            _LOGGER.info("Tool call: %s(%s)", tool_name, tool_args)
-                            
-                            result_data = await self._execute_tool(tool_name, tool_args, user_input)
+                        for fc, result_data in zip(function_calls, results):
+                            if isinstance(result_data, Exception):
+                                _LOGGER.error("Tool error: %s", result_data)
+                                result_data = {"error": str(result_data)}
                             function_responses.append({
                                 "functionResponse": {
-                                    "name": tool_name,
+                                    "name": fc.get("name"),
                                     "response": result_data
                                 }
                             })
-                        
+
                         contents.append({"role": "user", "parts": function_responses})
                         continue
                     
@@ -1565,15 +1605,21 @@ class LMStudioConversationEntity(ConversationEntity):
             try:
                 result = {}
                 self._track_api_call("weather")
-                
+
                 async with asyncio.timeout(API_TIMEOUT):
-                    # Get current weather using lat/lon for accuracy
+                    # PARALLEL fetch: current weather AND forecast simultaneously
                     current_url = f"https://api.openweathermap.org/data/2.5/weather?lat={latitude}&lon={longitude}&appid={api_key}&units=imperial"
-                    
-                    async with self._session.get(current_url) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            
+                    forecast_url = f"https://api.openweathermap.org/data/2.5/forecast?lat={latitude}&lon={longitude}&appid={api_key}&units=imperial"
+
+                    # Fire both requests at once
+                    current_task = self._session.get(current_url)
+                    forecast_task = self._session.get(forecast_url)
+
+                    async with current_task as current_response, forecast_task as forecast_response:
+                        # Process current weather
+                        if current_response.status == 200:
+                            data = await current_response.json()
+
                             result["current"] = {
                                 "temperature": round(data["main"]["temp"]),
                                 "feels_like": round(data["main"]["feels_like"]),
@@ -1582,22 +1628,19 @@ class LMStudioConversationEntity(ConversationEntity):
                                 "wind_speed": round(data["wind"]["speed"]),
                                 "location": location_name or data["name"]
                             }
-                            
+
                             # Add rain if present
                             if "rain" in data:
                                 result["current"]["rain_1h"] = data["rain"].get("1h", 0)
-                            
+
                             _LOGGER.info("Current weather: %s", result["current"])
                         else:
-                            _LOGGER.error("Weather API error: %s", response.status)
+                            _LOGGER.error("Weather API error: %s", current_response.status)
                             return {"error": "Could not get current weather"}
-                    
-                    # Get forecast data (for today's high/low AND weekly forecast)
-                    forecast_url = f"https://api.openweathermap.org/data/2.5/forecast?lat={latitude}&lon={longitude}&appid={api_key}&units=imperial"
-                    
-                    async with self._session.get(forecast_url) as response:
-                        if response.status == 200:
-                            data = await response.json()
+
+                        # Process forecast data (for today's high/low AND weekly forecast)
+                        if forecast_response.status == 200:
+                            data = await forecast_response.json()
                             
                             # Get NEXT HOUR rain chance from first forecast entry (3-hour forecast)
                             next_hour_rain = 0
