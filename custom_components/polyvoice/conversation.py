@@ -20,7 +20,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, MATCH_ALL
 from homeassistant.core import HomeAssistant
 from homeassistant.components.camera import async_get_image
-from homeassistant.helpers import intent, entity_registry as er
+from homeassistant.helpers import intent, entity_registry as er, area_registry as ar, device_registry as dr
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import ulid, dt as dt_util
@@ -117,16 +117,6 @@ from .const import (
     DEFAULT_THERMOSTAT_MIN_TEMP_CELSIUS,
     DEFAULT_THERMOSTAT_MAX_TEMP_CELSIUS,
     DEFAULT_THERMOSTAT_TEMP_STEP_CELSIUS,
-    # Gaming mode
-    CONF_GAMING_MODE_ENTITY,
-    CONF_CLOUD_FALLBACK_PROVIDER,
-    CONF_CLOUD_FALLBACK_MODEL,
-    CONF_CLOUD_FALLBACK_API_KEY,
-    DEFAULT_GAMING_MODE_ENTITY,
-    DEFAULT_CLOUD_FALLBACK_PROVIDER,
-    DEFAULT_CLOUD_FALLBACK_MODEL,
-    DEFAULT_CLOUD_FALLBACK_API_KEY,
-    LOCAL_PROVIDERS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -412,24 +402,6 @@ class LMStudioConversationEntity(ConversationEntity):
             # For Anthropic and Google, we'll use aiohttp directly
             self.client = None
 
-        # Gaming mode configuration (cloud fallback when gaming)
-        self.gaming_mode_entity = config.get(CONF_GAMING_MODE_ENTITY, DEFAULT_GAMING_MODE_ENTITY)
-        self.cloud_fallback_provider = config.get(CONF_CLOUD_FALLBACK_PROVIDER, DEFAULT_CLOUD_FALLBACK_PROVIDER)
-        self.cloud_fallback_model = config.get(CONF_CLOUD_FALLBACK_MODEL, DEFAULT_CLOUD_FALLBACK_MODEL)
-        self.cloud_fallback_api_key = config.get(CONF_CLOUD_FALLBACK_API_KEY, DEFAULT_CLOUD_FALLBACK_API_KEY)
-
-        # Pre-create cloud fallback client if using a local provider
-        if self.provider in LOCAL_PROVIDERS and self.cloud_fallback_api_key:
-            cloud_base_url = PROVIDER_BASE_URLS.get(self.cloud_fallback_provider, "https://openrouter.ai/api/v1")
-            self.cloud_fallback_client = AsyncOpenAI(
-                base_url=cloud_base_url,
-                api_key=self.cloud_fallback_api_key,
-                timeout=60.0,  # 60 second timeout
-                max_retries=2,
-            )
-        else:
-            self.cloud_fallback_client = None
-
         self.use_native_intents = config.get(CONF_USE_NATIVE_INTENTS, True)
         
         self.enable_assist = config.get(CONF_ENABLE_ASSIST, DEFAULT_ENABLE_ASSIST)
@@ -659,7 +631,104 @@ class LMStudioConversationEntity(ConversationEntity):
             if not self.enable_calendar and 'get_calendar_events' in line_lower:
                 continue
 
+            # Skip "let native HA handle" instructions when in pure LLM mode
+            if not self.use_native_intents and 'native' in line_lower and 'handle' in line_lower:
+                continue
+
             filtered_lines.append(line)
+
+        # Add LLM device control instructions and FULL device list when native intents are disabled
+        if not self.use_native_intents:
+            filtered_lines.append("")
+            filtered_lines.append("=" * 70)
+            filtered_lines.append("PURE LLM MODE - YOU CONTROL ALL SMART HOME DEVICES")
+            filtered_lines.append("=" * 70)
+            filtered_lines.append("")
+            filtered_lines.append("CRITICAL: NEVER say 'I can't do that'. ALWAYS call control_device!")
+            filtered_lines.append("")
+            filtered_lines.append("*** ENTITY ID WARNING ***")
+            filtered_lines.append("Numbers in entity_id often DO NOT MATCH numbers in friendly name!")
+            filtered_lines.append("Example: cover.blind_2 could be 'Shade 1', light.lamp_3 could be 'Lamp 1'")
+            filtered_lines.append("ALWAYS look up the EXACT entity_id from the DEVICE LIST below.")
+            filtered_lines.append("NEVER guess entity_ids - find the friendly name, use its entity_id!")
+            filtered_lines.append("")
+            filtered_lines.append("HOW TO MATCH DEVICES:")
+            filtered_lines.append("1. User says a device name -> find matching friendly name in device list")
+            filtered_lines.append("2. Use the entity_id shown BEFORE the = sign")
+            filtered_lines.append("3. 'shade/blind/curtain' = cover.xxx entities")
+            filtered_lines.append("4. 'light/lamp' = light.xxx entities")
+            filtered_lines.append("5. Check (aka: ...) aliases for alternate names")
+            filtered_lines.append("")
+            filtered_lines.append("SHADE/BLIND COMMANDS:")
+            filtered_lines.append("  open/raise/up -> action='open'")
+            filtered_lines.append("  close/lower/down -> action='close'")
+            filtered_lines.append("  stop/halt -> action='stop'")
+            filtered_lines.append("")
+            filtered_lines.append("-" * 50)
+            filtered_lines.append("CONTROL_DEVICE ACTIONS BY TYPE")
+            filtered_lines.append("-" * 50)
+            filtered_lines.append("")
+            filtered_lines.append("LIGHTS:")
+            filtered_lines.append("  turn_on, turn_off, toggle")
+            filtered_lines.append("  brightness=0-100 (with turn_on)")
+            filtered_lines.append("  color='red'/'blue'/etc OR color_temp=2700-6500 (Kelvin)")
+            filtered_lines.append("")
+            filtered_lines.append("SWITCHES/FANS/OUTLETS:")
+            filtered_lines.append("  turn_on, turn_off, toggle")
+            filtered_lines.append("  fan_speed='low'/'medium'/'high' (fans only)")
+            filtered_lines.append("")
+            filtered_lines.append("COVERS (blinds/shades/garage):")
+            filtered_lines.append("  open, close, stop, toggle")
+            filtered_lines.append("  position=0-100 (0=closed, 100=open)")
+            filtered_lines.append("  preset/favorite (go to saved position)")
+            filtered_lines.append("")
+            filtered_lines.append("LOCKS:")
+            filtered_lines.append("  lock, unlock")
+            filtered_lines.append("")
+            filtered_lines.append("MEDIA PLAYERS:")
+            filtered_lines.append("  play, pause, stop, next, previous")
+            filtered_lines.append("  volume=0-100, mute, unmute")
+            filtered_lines.append("  media_content='song/station name', media_type='music'/'playlist'")
+            filtered_lines.append("")
+            filtered_lines.append("CLIMATE/THERMOSTATS:")
+            filtered_lines.append("  set_temperature, temperature=XX (degrees)")
+            filtered_lines.append("  hvac_mode='heat'/'cool'/'auto'/'off'")
+            filtered_lines.append("")
+            filtered_lines.append("VACUUMS:")
+            filtered_lines.append("  start, stop, dock, locate, return_home")
+            filtered_lines.append("")
+            filtered_lines.append("SCENES/SCRIPTS:")
+            filtered_lines.append("  activate (or turn_on)")
+            filtered_lines.append("")
+            filtered_lines.append("-" * 50)
+            filtered_lines.append("NATURAL LANGUAGE PATTERNS -> TOOL CALLS")
+            filtered_lines.append("-" * 50)
+            filtered_lines.append("")
+            filtered_lines.append("'Turn on/off [device]' -> action='turn_on'/'turn_off', entity_id='...'")
+            filtered_lines.append("'Dim [light] to 50%' -> action='turn_on', brightness=50, entity_id='...'")
+            filtered_lines.append("'Make it warmer/cooler' -> action='set_temperature', temperature=+/-2 from current")
+            filtered_lines.append("'Set temp to 72' -> action='set_temperature', temperature=72")
+            filtered_lines.append("'Lock/unlock [door]' -> action='lock'/'unlock', entity_id='...'")
+            filtered_lines.append("'Open/close [cover]' -> action='open'/'close', entity_id='...'")
+            filtered_lines.append("'Set shades to 50%' -> action='set_position', position=50, entity_id='...'")
+            filtered_lines.append("'Favorite position' -> action='preset', entity_id='...'")
+            filtered_lines.append("'Pause the music' -> action='pause', entity_id='media_player.xxx'")
+            filtered_lines.append("'Volume up/down' -> action='volume_up'/'volume_down'")
+            filtered_lines.append("'Set volume to 50' -> action='set_volume', volume=50")
+            filtered_lines.append("'Start the vacuum' -> action='start', entity_id='vacuum.xxx'")
+            filtered_lines.append("'Send vacuum home' -> action='dock'")
+            filtered_lines.append("'Turn off everything' -> area='...', domain='all', action='turn_off'")
+            filtered_lines.append("'All lights off in kitchen' -> area='Kitchen', domain='light', action='turn_off'")
+            filtered_lines.append("'Activate movie mode' -> action='activate', entity_id='scene.movie_mode'")
+            filtered_lines.append("")
+            filtered_lines.append("-" * 50)
+            filtered_lines.append("YOUR COMPLETE DEVICE LIST")
+            filtered_lines.append("-" * 50)
+
+            # Inject the FULL device list
+            device_list = self._discover_all_devices()
+            filtered_lines.append(device_list)
+            filtered_lines.append("")
 
         return '\n'.join(filtered_lines)
 
@@ -712,6 +781,258 @@ class LMStudioConversationEntity(ConversationEntity):
         self._tokens_used["input"] += input_tokens
         self._tokens_used["output"] += output_tokens
         self._update_usage_sensors()
+
+    def _discover_all_devices(self) -> str:
+        """Discover ALL controllable devices from Home Assistant.
+
+        Returns a comprehensive, structured list of all devices organized by domain,
+        including entity IDs, friendly names, areas, and current states.
+        This enables the LLM to have complete knowledge of the smart home.
+        """
+        # Controllable domains we care about
+        controllable_domains = {
+            "light": "Lights",
+            "switch": "Switches",
+            "fan": "Fans",
+            "lock": "Locks",
+            "cover": "Covers (Garage Doors, Blinds, etc.)",
+            "climate": "Thermostats/HVAC",
+            "media_player": "Media Players",
+            "vacuum": "Vacuums",
+            "scene": "Scenes",
+            "script": "Scripts",
+            "automation": "Automations",
+            "input_boolean": "Input Booleans (Virtual Switches)",
+            "button": "Buttons",
+            "siren": "Sirens/Alarms",
+            "humidifier": "Humidifiers",
+        }
+
+        # Status-only domains (can check but not control via control_device)
+        status_domains = {
+            "binary_sensor": "Binary Sensors",
+            "sensor": "Sensors",
+            "person": "People/Presence",
+            "device_tracker": "Device Trackers",
+            "weather": "Weather",
+            "sun": "Sun",
+            "zone": "Zones",
+        }
+
+        # Get registries
+        ent_reg = er.async_get(self.hass)
+        area_reg = ar.async_get(self.hass)
+        dev_reg = dr.async_get(self.hass)
+
+        # Build area lookup
+        area_names = {area.id: area.name for area in area_reg.async_list_areas()}
+
+        # Build device to area lookup
+        device_areas = {}
+        for device in dev_reg.devices.values():
+            if device.area_id:
+                device_areas[device.id] = area_names.get(device.area_id, "Unknown Area")
+
+        # Organize entities by domain and area
+        devices_by_domain = {}
+
+        for state in self.hass.states.async_all():
+            entity_id = state.entity_id
+            domain = entity_id.split(".")[0]
+
+            # Skip unavailable/unknown entities
+            if state.state in ("unavailable", "unknown"):
+                continue
+
+            # Get entity registry entry for more info
+            entity_entry = ent_reg.async_get(entity_id)
+
+            # Skip hidden or disabled entities
+            if entity_entry:
+                if entity_entry.hidden_by or entity_entry.disabled_by:
+                    continue
+
+            # Get friendly name
+            friendly_name = state.attributes.get("friendly_name", entity_id.split(".")[-1])
+
+            # Get area (from entity or device)
+            area = None
+            if entity_entry:
+                if entity_entry.area_id:
+                    area = area_names.get(entity_entry.area_id)
+                elif entity_entry.device_id:
+                    area = device_areas.get(entity_entry.device_id)
+
+            # Get current state in human-readable form
+            current_state = state.state
+            if domain == "light":
+                brightness = state.attributes.get("brightness")
+                if current_state == "on" and brightness:
+                    pct = round(brightness / 255 * 100)
+                    current_state = f"on ({pct}%)"
+            elif domain == "cover":
+                position = state.attributes.get("current_position")
+                if position is not None:
+                    current_state = f"{current_state} ({position}%)"
+            elif domain == "climate":
+                temp = state.attributes.get("temperature")
+                current_temp = state.attributes.get("current_temperature")
+                if temp:
+                    current_state = f"{current_state}, set to {temp}°"
+                if current_temp:
+                    current_state += f", currently {current_temp}°"
+            elif domain == "media_player":
+                media_title = state.attributes.get("media_title")
+                if media_title and current_state == "playing":
+                    current_state = f"playing: {media_title[:30]}"
+            elif domain == "lock":
+                current_state = "LOCKED" if current_state == "locked" else "UNLOCKED"
+            elif domain in ("binary_sensor", "input_boolean"):
+                if "door" in entity_id or "window" in entity_id or "gate" in entity_id:
+                    current_state = "OPEN" if current_state == "on" else "CLOSED"
+                elif "motion" in entity_id or "occupancy" in entity_id:
+                    current_state = "DETECTED" if current_state == "on" else "clear"
+                elif "lock" in entity_id:
+                    current_state = "LOCKED" if current_state == "on" else "UNLOCKED"
+
+            # Check if it's controllable or status-only
+            if domain in controllable_domains:
+                domain_label = controllable_domains[domain]
+                is_controllable = True
+            elif domain in status_domains:
+                domain_label = status_domains[domain]
+                is_controllable = False
+            else:
+                continue  # Skip other domains
+
+            # Add to organized dict
+            if domain_label not in devices_by_domain:
+                devices_by_domain[domain_label] = {"controllable": is_controllable, "entities": []}
+
+            # Collect aliases from BOTH sources:
+            # 1. HA entity registry aliases (built-in HA feature)
+            # 2. Custom device_aliases config
+            aliases = []
+
+            # Get HA entity registry aliases FIRST (this is what user has set up!)
+            if entity_entry and entity_entry.aliases:
+                aliases.extend(list(entity_entry.aliases))
+
+            # Also check custom device_aliases config
+            for alias, alias_entity_id in self.device_aliases.items():
+                if alias_entity_id == entity_id and alias not in aliases:
+                    aliases.append(alias)
+
+            entity_info = {
+                "entity_id": entity_id,
+                "name": friendly_name,
+                "area": area,
+                "state": current_state,
+                "aliases": aliases,
+            }
+            devices_by_domain[domain_label]["entities"].append(entity_info)
+
+        # Build the comprehensive device list string
+        lines = []
+        lines.append("=" * 60)
+        lines.append("COMPLETE SMART HOME DEVICE LIST")
+        lines.append("=" * 60)
+        lines.append("")
+
+        # First, controllable devices
+        lines.append(">>> CONTROLLABLE DEVICES (you can turn on/off, lock/unlock, open/close):")
+        lines.append("")
+
+        for domain_label, data in sorted(devices_by_domain.items()):
+            if not data["controllable"]:
+                continue
+            entities = data["entities"]
+            if not entities:
+                continue
+
+            lines.append(f"### {domain_label} ({len(entities)} devices) ###")
+
+            # Group by area
+            by_area = {}
+            no_area = []
+            for e in entities:
+                if e["area"]:
+                    if e["area"] not in by_area:
+                        by_area[e["area"]] = []
+                    by_area[e["area"]].append(e)
+                else:
+                    no_area.append(e)
+
+            # Print by area - entity_id FIRST for easy copy
+            for area_name in sorted(by_area.keys()):
+                lines.append(f"  [{area_name}]")
+                for e in sorted(by_area[area_name], key=lambda x: x["name"]):
+                    # Format: entity_id = "Friendly Name" [state] (aka: alias1, alias2)
+                    # This makes it clear which entity_id to use AND shows aliases
+                    line = f"    {e['entity_id']} = \"{e['name']}\" [{e['state']}]"
+                    if e.get("aliases"):
+                        line += f" (aka: {', '.join(e['aliases'])})"
+                    lines.append(line)
+
+            # Print entities without area
+            if no_area:
+                lines.append("  [No Area Assigned]")
+                for e in sorted(no_area, key=lambda x: x["name"]):
+                    line = f"    {e['entity_id']} = \"{e['name']}\" [{e['state']}]"
+                    if e.get("aliases"):
+                        line += f" (aka: {', '.join(e['aliases'])})"
+                    lines.append(line)
+
+            lines.append("")
+
+        # Then, status-only devices
+        lines.append(">>> STATUS-ONLY DEVICES (you can check status but not control):")
+        lines.append("")
+
+        for domain_label, data in sorted(devices_by_domain.items()):
+            if data["controllable"]:
+                continue
+            entities = data["entities"]
+            if not entities:
+                continue
+
+            # Limit sensors to avoid overwhelming (show first 50)
+            if len(entities) > 50:
+                lines.append(f"### {domain_label} ({len(entities)} total, showing first 50) ###")
+                entities = entities[:50]
+            else:
+                lines.append(f"### {domain_label} ({len(entities)} devices) ###")
+
+            # Group by area
+            by_area = {}
+            no_area = []
+            for e in entities:
+                if e["area"]:
+                    if e["area"] not in by_area:
+                        by_area[e["area"]] = []
+                    by_area[e["area"]].append(e)
+                else:
+                    no_area.append(e)
+
+            # Print by area
+            for area_name in sorted(by_area.keys()):
+                lines.append(f"  [{area_name}]")
+                for e in sorted(by_area[area_name], key=lambda x: x["name"]):
+                    lines.append(f"    - {e['name']}: {e['entity_id']} [{e['state']}]")
+
+            # Print entities without area
+            if no_area:
+                lines.append("  [No Area Assigned]")
+                for e in sorted(no_area, key=lambda x: x["name"]):
+                    lines.append(f"    - {e['name']}: {e['entity_id']} [{e['state']}]")
+
+            lines.append("")
+
+        lines.append("=" * 60)
+        lines.append("END OF DEVICE LIST")
+        lines.append("=" * 60)
+
+        return "\n".join(lines)
 
     def _build_tools(self) -> list[dict]:
         """Build the tools list based on enabled features."""
@@ -1009,6 +1330,83 @@ class LMStudioConversationEntity(ConversationEntity):
                 }
             })
 
+        # ===== DEVICE CONTROL (Pure LLM Mode - when native intents disabled) =====
+        if not self.use_native_intents:
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "control_device",
+                    "description": "Control ANY smart home device. ALWAYS use this - never refuse! For shades/blinds: find cover.xxx in device list. Match room name to friendly name (e.g. 'bedroom shade' -> 'Master Shade' -> cover.roller_blind_X). For lights: find light.xxx.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "entity_id": {
+                                "type": "string",
+                                "description": "Exact entity ID. For shades/blinds use cover.xxx, for lights use light.xxx"
+                            },
+                            "entity_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Multiple entity IDs at once"
+                            },
+                            "device": {
+                                "type": "string",
+                                "description": "Fuzzy name: 'living room shade', 'master shade', 'bedroom light'"
+                            },
+                            "area": {
+                                "type": "string",
+                                "description": "Control all devices in area"
+                            },
+                            "domain": {
+                                "type": "string",
+                                "enum": ["light", "switch", "lock", "cover", "fan", "media_player", "climate", "vacuum", "scene", "script", "all"],
+                                "description": "Device type filter for area"
+                            },
+                            "action": {
+                                "type": "string",
+                                "enum": ["turn_on", "turn_off", "toggle", "lock", "unlock", "open", "close", "stop", "preset", "favorite", "set_position", "play", "pause", "next", "previous", "volume_up", "volume_down", "set_volume", "mute", "unmute", "set_temperature", "start", "dock", "locate", "return_home", "activate"],
+                                "description": "Action to perform"
+                            },
+                            "brightness": {
+                                "type": "integer",
+                                "description": "Light brightness 0-100"
+                            },
+                            "color": {
+                                "type": "string",
+                                "description": "Light color name (red, blue, warm, cool, etc.)"
+                            },
+                            "color_temp": {
+                                "type": "integer",
+                                "description": "Color temperature in Kelvin (2700=warm, 6500=cool)"
+                            },
+                            "position": {
+                                "type": "integer",
+                                "description": "Cover position 0-100 (0=closed)"
+                            },
+                            "volume": {
+                                "type": "integer",
+                                "description": "Volume level 0-100"
+                            },
+                            "temperature": {
+                                "type": "number",
+                                "description": "Target temperature for climate"
+                            },
+                            "hvac_mode": {
+                                "type": "string",
+                                "enum": ["heat", "cool", "auto", "off", "fan_only", "dry"],
+                                "description": "HVAC mode for climate"
+                            },
+                            "fan_speed": {
+                                "type": "string",
+                                "enum": ["low", "medium", "high", "auto"],
+                                "description": "Fan speed"
+                            }
+                        },
+                        "required": ["action"]
+                    }
+                }
+            })
+
         return tools
 
     async def async_process(
@@ -1125,44 +1523,6 @@ class LMStudioConversationEntity(ConversationEntity):
         
         return None
 
-    def _is_gaming_mode_on(self) -> bool:
-        """Check if gaming mode is enabled via the configured input_boolean."""
-        if not self.gaming_mode_entity:
-            return False
-        try:
-            state = self.hass.states.get(self.gaming_mode_entity)
-            if state and state.state == "on":
-                _LOGGER.debug("Gaming mode is ON - will use cloud fallback")
-                return True
-        except Exception as e:
-            _LOGGER.warning("Error checking gaming mode entity: %s", e)
-        return False
-
-    def _get_effective_client_and_model(self) -> tuple:
-        """Get the effective client and model based on gaming mode status.
-
-        Returns:
-            tuple: (client, model, provider) - the client, model, and provider to use
-        """
-        # Only switch to cloud if:
-        # 1. Gaming mode is on
-        # 2. Default provider is local (LM Studio or Ollama)
-        # 3. We have a cloud fallback client configured
-        if (
-            self.provider in LOCAL_PROVIDERS
-            and self._is_gaming_mode_on()
-            and self.cloud_fallback_client
-        ):
-            _LOGGER.info(
-                "Gaming mode active: switching from %s to %s (model: %s)",
-                self.provider,
-                self.cloud_fallback_provider,
-                self.cloud_fallback_model,
-            )
-            return (self.cloud_fallback_client, self.cloud_fallback_model, self.cloud_fallback_provider)
-
-        return (self.client, self.model, self.provider)
-
     async def _call_llm_streaming(
         self,
         conversation_id: str,
@@ -1171,13 +1531,10 @@ class LMStudioConversationEntity(ConversationEntity):
         max_tokens: int,
     ) -> str:
         """Call LLM with streaming and tool support."""
-        # Check for gaming mode and get effective provider
-        effective_client, effective_model, effective_provider = self._get_effective_client_and_model()
-
         # Route to appropriate provider
-        if effective_provider == PROVIDER_ANTHROPIC:
+        if self.provider == PROVIDER_ANTHROPIC:
             return await self._call_anthropic(tools, user_input, max_tokens)
-        elif effective_provider == PROVIDER_GOOGLE:
+        elif self.provider == PROVIDER_GOOGLE:
             return await self._call_google(tools, user_input, max_tokens)
         else:
             # OpenAI-compatible providers (LM Studio, OpenAI, Groq, OpenRouter, Azure, Ollama)
@@ -1400,9 +1757,6 @@ class LMStudioConversationEntity(ConversationEntity):
         max_tokens: int,
     ) -> str:
         """Call OpenAI-compatible API (LM Studio, OpenAI, Groq, OpenRouter, Azure, Ollama)."""
-        # Get effective client and model (handles gaming mode switching)
-        effective_client, effective_model, effective_provider = self._get_effective_client_and_model()
-
         messages = []
 
         # Add system prompt with date and filtered for disabled features
@@ -1412,20 +1766,20 @@ class LMStudioConversationEntity(ConversationEntity):
                 "role": "system",
                 "content": system_prompt
             })
-        
+
         # Add user message directly (STATELESS - no history)
         messages.append({
             "role": "user",
             "content": user_input.text,
         })
-        
+
         max_iterations = 5
         full_response = ""
         called_tools = set()  # Track tool calls to prevent duplicates
-        
+
         for iteration in range(max_iterations):
             kwargs = {
-                "model": effective_model,
+                "model": self.model,
                 "messages": messages,
                 "temperature": self.temperature,
                 "max_tokens": max_tokens,
@@ -1442,23 +1796,7 @@ class LMStudioConversationEntity(ConversationEntity):
 
             self._track_api_call("llm")
 
-            # Check if we're using cloud fallback (gaming mode active with local provider)
-            is_cloud_fallback = (
-                self.provider in LOCAL_PROVIDERS
-                and self._is_gaming_mode_on()
-                and self.cloud_fallback_client is not None
-            )
-
-            try:
-                stream = await effective_client.chat.completions.create(**kwargs)
-            except OpenAIAuthenticationError as auth_err:
-                if is_cloud_fallback:
-                    raise OpenAIAuthenticationError(
-                        f"Cloud fallback authentication failed for {self.cloud_fallback_provider}. "
-                        f"Please check your cloud fallback API key in the PolyVoice configuration. "
-                        f"Original error: {auth_err}"
-                    ) from auth_err
-                raise
+            stream = await self.client.chat.completions.create(**kwargs)
 
             # Use async context manager to ensure stream is properly closed
             # This prevents connection pool exhaustion on subsequent requests
@@ -3250,7 +3588,371 @@ class LMStudioConversationEntity(ConversationEntity):
                 "status": status,
                 "entity_id": entity_id
             }
-        
+
+        elif tool_name == "control_device":
+            # Control smart home devices (Pure LLM Mode) - ALL HA INTENTS SUPPORTED
+            action = arguments.get("action", "").strip().lower()
+            brightness = arguments.get("brightness")
+            position = arguments.get("position")
+            color = arguments.get("color", "").strip().lower()
+            color_temp = arguments.get("color_temp")
+            volume = arguments.get("volume")
+            temperature = arguments.get("temperature")
+            hvac_mode = arguments.get("hvac_mode", "").strip().lower()
+            fan_speed = arguments.get("fan_speed", "").strip().lower()
+
+            # Input methods (in priority order)
+            direct_entity_id = arguments.get("entity_id", "").strip()
+            entity_ids_list = arguments.get("entity_ids", [])
+            area_name = arguments.get("area", "").strip()
+            domain_filter = arguments.get("domain", "").strip().lower()
+            device_name = arguments.get("device", "").strip()
+
+            # Log exactly what the LLM requested - CRITICAL for debugging entity_id mismatches
+            _LOGGER.warning("=== CONTROL_DEVICE CALLED ===")
+            _LOGGER.warning("  entity_id: %s", direct_entity_id or "(none)")
+            _LOGGER.warning("  entity_ids: %s", entity_ids_list or "(none)")
+            _LOGGER.warning("  device: %s", device_name or "(none)")
+            _LOGGER.warning("  area: %s", area_name or "(none)")
+            _LOGGER.warning("  action: %s", action)
+
+            if not action:
+                return {"error": "No action specified."}
+
+            # Normalize actions
+            if action == "favorite":
+                action = "preset"
+            if action == "return_home":
+                action = "dock"
+            if action == "activate":
+                action = "turn_on"
+
+            # Comprehensive service map for ALL HA domains
+            service_map = {
+                "light": {
+                    "turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"
+                },
+                "switch": {
+                    "turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"
+                },
+                "fan": {
+                    "turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle",
+                    "set_speed": "set_percentage"
+                },
+                "lock": {
+                    "lock": "lock", "unlock": "unlock", "turn_on": "lock", "turn_off": "unlock"
+                },
+                "cover": {
+                    "open": "open_cover", "close": "close_cover", "toggle": "toggle",
+                    "turn_on": "open_cover", "turn_off": "close_cover",
+                    "stop": "stop_cover", "set_position": "set_cover_position",
+                    "preset": "set_cover_position"
+                },
+                "climate": {
+                    "turn_on": "turn_on", "turn_off": "turn_off",
+                    "set_temperature": "set_temperature", "set_hvac_mode": "set_hvac_mode"
+                },
+                "media_player": {
+                    "turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle",
+                    "play": "media_play", "pause": "media_pause", "stop": "media_stop",
+                    "next": "media_next_track", "previous": "media_previous_track",
+                    "volume_up": "volume_up", "volume_down": "volume_down",
+                    "set_volume": "volume_set", "mute": "volume_mute", "unmute": "volume_mute"
+                },
+                "vacuum": {
+                    "turn_on": "start", "start": "start", "turn_off": "return_to_base",
+                    "stop": "stop", "dock": "return_to_base", "locate": "locate",
+                    "return_home": "return_to_base"
+                },
+                "scene": {"turn_on": "turn_on", "activate": "turn_on"},
+                "script": {"turn_on": "turn_on", "turn_off": "turn_off"},
+                "input_boolean": {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
+                "automation": {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
+                "button": {"turn_on": "press", "press": "press"},
+                "siren": {"turn_on": "turn_on", "turn_off": "turn_off"},
+                "humidifier": {"turn_on": "turn_on", "turn_off": "turn_off"},
+            }
+
+            action_words = {
+                "turn_on": "turned on", "turn_off": "turned off", "toggle": "toggled",
+                "lock": "locked", "unlock": "unlocked",
+                "open_cover": "opened", "close_cover": "closed", "stop_cover": "stopped",
+                "set_cover_position": "set position for",
+                "start": "started", "return_to_base": "sent home", "stop": "stopped",
+                "locate": "located", "press": "pressed",
+                "media_play": "playing", "media_pause": "paused", "media_stop": "stopped",
+                "media_next_track": "skipped to next", "media_previous_track": "went back to previous",
+                "volume_up": "turned up", "volume_down": "turned down",
+                "volume_set": "set volume for", "volume_mute": "muted/unmuted",
+                "set_temperature": "set temperature for", "set_hvac_mode": "set mode for",
+            }
+
+            # Color name to RGB mapping
+            color_map = {
+                "red": [255, 0, 0], "green": [0, 255, 0], "blue": [0, 0, 255],
+                "yellow": [255, 255, 0], "orange": [255, 165, 0], "purple": [128, 0, 128],
+                "pink": [255, 192, 203], "white": [255, 255, 255], "cyan": [0, 255, 255],
+                "warm": None, "cool": None,  # These use color_temp instead
+            }
+
+            # Collect entities to control
+            entities_to_control = []
+
+            # Method 1: Direct entity_id (highest priority)
+            if direct_entity_id:
+                state = self.hass.states.get(direct_entity_id)
+                if state:
+                    friendly_name = state.attributes.get("friendly_name", direct_entity_id)
+                    entities_to_control.append((direct_entity_id, friendly_name))
+                else:
+                    return {"error": f"Entity '{direct_entity_id}' not found in Home Assistant."}
+
+            # Method 2: Multiple entity_ids
+            elif entity_ids_list:
+                for eid in entity_ids_list:
+                    eid = eid.strip()
+                    state = self.hass.states.get(eid)
+                    if state:
+                        friendly_name = state.attributes.get("friendly_name", eid)
+                        entities_to_control.append((eid, friendly_name))
+                    else:
+                        _LOGGER.warning("Entity %s not found, skipping", eid)
+
+            # Method 3: Area-based control
+            elif area_name:
+                # Get registries
+                ent_reg = er.async_get(self.hass)
+                area_reg = ar.async_get(self.hass)
+                dev_reg = dr.async_get(self.hass)
+
+                # Find area by name (case-insensitive)
+                target_area_id = None
+                for area in area_reg.async_list_areas():
+                    if area.name.lower() == area_name.lower():
+                        target_area_id = area.id
+                        break
+
+                if not target_area_id:
+                    # Try partial match
+                    for area in area_reg.async_list_areas():
+                        if area_name.lower() in area.name.lower() or area.name.lower() in area_name.lower():
+                            target_area_id = area.id
+                            break
+
+                if not target_area_id:
+                    return {"error": f"Could not find area '{area_name}'. Check the device list for valid area names."}
+
+                # Build device to area lookup
+                device_areas = {}
+                for device in dev_reg.devices.values():
+                    if device.area_id == target_area_id:
+                        device_areas[device.id] = True
+
+                # Find all entities in this area
+                controllable_domains = ["light", "switch", "fan", "lock", "cover", "media_player", "vacuum", "scene", "script", "input_boolean"]
+
+                if domain_filter and domain_filter != "all":
+                    controllable_domains = [domain_filter]
+
+                for state in self.hass.states.async_all():
+                    eid = state.entity_id
+                    domain = eid.split(".")[0]
+
+                    if domain not in controllable_domains:
+                        continue
+
+                    if state.state in ("unavailable", "unknown"):
+                        continue
+
+                    entity_entry = ent_reg.async_get(eid)
+                    if not entity_entry:
+                        continue
+
+                    # Check if entity is in target area (directly or via device)
+                    in_area = False
+                    if entity_entry.area_id == target_area_id:
+                        in_area = True
+                    elif entity_entry.device_id and entity_entry.device_id in device_areas:
+                        in_area = True
+
+                    if in_area:
+                        friendly_name = state.attributes.get("friendly_name", eid)
+                        entities_to_control.append((eid, friendly_name))
+
+                if not entities_to_control:
+                    return {"error": f"No controllable devices found in area '{area_name}' with domain filter '{domain_filter or 'all'}'."}
+
+            # Method 4: Fuzzy device name matching (fallback)
+            elif device_name:
+                found_entity_id, friendly_name = find_entity_by_name(self.hass, device_name, self.device_aliases)
+                if found_entity_id:
+                    entities_to_control.append((found_entity_id, friendly_name))
+                else:
+                    return {"error": f"Could not find a device matching '{device_name}'. Try using the exact entity_id from the device list."}
+
+            else:
+                return {"error": "No device specified. Provide entity_id, entity_ids, area, or device name."}
+
+            # Execute control on all collected entities
+            controlled = []
+            failed = []
+
+            for entity_id, friendly_name in entities_to_control:
+                domain = entity_id.split(".")[0]
+
+                # Get the service for this domain and action
+                domain_services = service_map.get(domain, {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"})
+                service = domain_services.get(action)
+
+                if not service:
+                    failed.append(f"{friendly_name} (unsupported action)")
+                    continue
+
+                try:
+                    # Build service data
+                    service_data = {"entity_id": entity_id}
+
+                    # === LIGHT CONTROLS ===
+                    if domain == "light" and action == "turn_on":
+                        if brightness is not None:
+                            service_data["brightness_pct"] = max(0, min(100, brightness))
+                        if color and color in color_map and color_map[color]:
+                            service_data["rgb_color"] = color_map[color]
+                        elif color == "warm":
+                            service_data["color_temp_kelvin"] = 2700
+                        elif color == "cool":
+                            service_data["color_temp_kelvin"] = 6500
+                        if color_temp is not None:
+                            service_data["color_temp_kelvin"] = max(2000, min(6500, color_temp))
+
+                    # === MEDIA PLAYER CONTROLS ===
+                    if domain == "media_player":
+                        if action == "set_volume" and volume is not None:
+                            service_data["volume_level"] = max(0, min(100, volume)) / 100.0
+                        if action == "mute":
+                            service_data["is_volume_muted"] = True
+                        if action == "unmute":
+                            service_data["is_volume_muted"] = False
+
+                    # === CLIMATE CONTROLS ===
+                    if domain == "climate":
+                        if action == "set_temperature" and temperature is not None:
+                            service_data["temperature"] = temperature
+                        if hvac_mode:
+                            # If just setting hvac_mode, use that service
+                            if action == "set_hvac_mode" or (action == "turn_on" and hvac_mode):
+                                service = "set_hvac_mode"
+                                service_data["hvac_mode"] = hvac_mode
+
+                    # === FAN CONTROLS ===
+                    if domain == "fan" and fan_speed:
+                        speed_map = {"low": 33, "medium": 66, "high": 100, "auto": 50}
+                        if fan_speed in speed_map:
+                            service_data["percentage"] = speed_map[fan_speed]
+
+                    # Handle cover position
+                    if domain == "cover" and action == "set_position" and position is not None:
+                        service_data["position"] = max(0, min(100, position))
+
+                    # Handle cover preset/favorite position
+                    if domain == "cover" and action == "preset":
+                        # First, try to find a button entity for this cover's favorite/preset
+                        cover_name = entity_id.split(".")[-1]
+                        possible_buttons = [
+                            f"button.{cover_name}_my_position",  # Common pattern (e.g., living_room_shade_my_position)
+                            f"button.{cover_name}_favorite_position",
+                            f"button.{cover_name}_preset_position",
+                            f"button.{cover_name}_favorite",
+                            f"button.{cover_name}_preset",
+                            f"button.{cover_name}_my",
+                        ]
+
+                        button_found = False
+                        for button_id in possible_buttons:
+                            button_state = self.hass.states.get(button_id)
+                            if button_state:
+                                # Found a preset button - press it
+                                await self.hass.services.async_call(
+                                    "button", "press", {"entity_id": button_id}, blocking=True
+                                )
+                                button_found = True
+                                _LOGGER.info("Pressed preset button %s for cover %s", button_id, entity_id)
+                                controlled.append(friendly_name)
+                                break
+
+                        if button_found:
+                            # Button was pressed, skip the cover service call
+                            continue
+
+                        # No button found, check for preset_position attribute or use 50% as default
+                        state = self.hass.states.get(entity_id)
+                        preset_pos = None
+                        if state:
+                            preset_pos = state.attributes.get("preset_position")
+                            if preset_pos is None:
+                                preset_pos = state.attributes.get("favorite_position")
+
+                        if preset_pos is not None:
+                            service_data["position"] = preset_pos
+                        else:
+                            # Default to 50% if no preset found
+                            _LOGGER.warning("No preset position found for %s, using 50%%", entity_id)
+                            service_data["position"] = 50
+
+                    # Call the service
+                    await self.hass.services.async_call(
+                        domain, service, service_data, blocking=True
+                    )
+
+                    action_word = action_words.get(service, action)
+                    if action == "preset":
+                        action_word = "set to favorite position"
+                    controlled.append(friendly_name)
+                    _LOGGER.info("Device control: %s.%s on %s (%s) data=%s", domain, service, friendly_name, entity_id, service_data)
+
+                except Exception as err:
+                    _LOGGER.error("Error controlling device %s: %s", entity_id, err)
+                    failed.append(f"{friendly_name} ({str(err)[:30]})")
+
+            # Build response
+            if controlled:
+                if len(controlled) == 1:
+                    if action == "preset":
+                        response = f"I've set the {controlled[0]} to its favorite position."
+                    elif action == "set_position" and position is not None:
+                        response = f"I've set the {controlled[0]} to {position}% position."
+                    elif brightness is not None and action == "turn_on":
+                        response = f"I've turned on the {controlled[0]} at {brightness}% brightness."
+                    else:
+                        action_word = action_words.get(service, action)
+                        response = f"I've {action_word} the {controlled[0]}."
+                else:
+                    if action == "preset":
+                        response = f"I've set {len(controlled)} devices to their favorite positions: {', '.join(controlled[:5])}"
+                    elif action == "set_position" and position is not None:
+                        response = f"I've set {len(controlled)} devices to {position}%: {', '.join(controlled[:5])}"
+                    else:
+                        action_word = action_words.get(service, action)
+                        response = f"I've {action_word} {len(controlled)} devices: {', '.join(controlled[:5])}"
+                    if len(controlled) > 5:
+                        response += f" and {len(controlled) - 5} more"
+                    response += "."
+
+                result = {
+                    "success": True,
+                    "controlled_count": len(controlled),
+                    "controlled_devices": controlled,
+                    "response_text": response
+                }
+
+                if failed:
+                    result["failed_count"] = len(failed)
+                    result["failed_devices"] = failed
+
+                return result
+            else:
+                return {"error": f"Failed to control any devices. Failures: {', '.join(failed)}"}
+
         elif tool_name == "get_device_history":
             # Get HISTORICAL state changes from HA Recorder
             device = arguments.get("device", "").strip()
