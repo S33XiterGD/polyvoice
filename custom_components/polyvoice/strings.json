@@ -29,14 +29,14 @@
           "connection": "Connection & Provider",
           "model": "Model Settings",
           "features": "Enable/Disable Features",
-          "entities": "Entity Configuration",
-          "aliases": "Device Aliases",
+          "entities": "PolyVoice Default Entities",
+          "aliases": "LLM Fallback Aliases",
           "music_rooms": "Music Room Mapping",
           "blinds": "Blinds/Shades Control",
           "api_keys": "External API Keys",
           "location": "Location Settings",
           "intents": "Excluded Intents",
-          "advanced": "Advanced Settings"
+          "advanced": "System Prompt"
         }
       },
       "connection": {
@@ -77,8 +77,8 @@
         }
       },
       "entities": {
-        "title": "Entity Configuration",
-        "description": "Configure which Home Assistant entities to use for each feature",
+        "title": "PolyVoice Default Entities",
+        "description": "Configure which Home Assistant entities PolyVoice uses for its LLM functions",
         "data": {
           "thermostat_entity": "Thermostat",
           "thermostat_use_celsius": "Use Celsius (instead of Fahrenheit)",
@@ -91,7 +91,7 @@
         }
       },
       "aliases": {
-        "title": "Device Aliases",
+        "title": "LLM Fallback Aliases",
         "description": "{aliases}",
         "data": {
           "alias_entity": "Select Entity",
@@ -148,7 +148,7 @@
         }
       },
       "advanced": {
-        "title": "Advanced Settings",
+        "title": "System Prompt",
         "data": {
           "system_prompt": "System Prompt"
         }

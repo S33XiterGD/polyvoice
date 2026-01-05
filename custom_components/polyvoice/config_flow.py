@@ -437,14 +437,14 @@ class LMStudioOptionsFlowHandler(config_entries.OptionsFlow):
                 "connection": "Connection Settings",
                 "model": "Model Settings",
                 "features": "Enable/Disable Features",
-                "entities": "Entity Configuration",
-                "aliases": "Device Aliases",
+                "entities": "PolyVoice Default Entities",
+                "aliases": "LLM Fallback Aliases",
                 "music_rooms": "Music Room Mapping",
                 "blinds": "Blinds/Shades Control",
                 "api_keys": "API Keys",
                 "location": "Location Settings",
-                "intents": "Native Intents",
-                "advanced": "Advanced Settings",
+                "intents": "Excluded Intents",
+                "advanced": "System Prompt",
             },
         )
 
