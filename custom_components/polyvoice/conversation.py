@@ -1322,7 +1322,7 @@ class LMStudioConversationEntity(ConversationEntity):
                 "type": "function",
                 "function": {
                     "name": "control_music",
-                    "description": f"Control music playback via Music Assistant. Rooms: {rooms_list}. Actions: play, pause, resume, stop, skip_next, skip_previous, what_playing, transfer, shuffle. Use 'shuffle' to find and play a playlist in shuffle mode.",
+                    "description": f"Control MUSIC playback ONLY via Music Assistant. Rooms: {rooms_list}. Actions: play, pause, resume, stop, skip_next, skip_previous, what_playing, transfer, shuffle. IMPORTANT: This is ONLY for music/audio. Do NOT use for blinds, shades, curtains, or any physical devices - use control_device for those!",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -1351,7 +1351,7 @@ class LMStudioConversationEntity(ConversationEntity):
                 "type": "function",
                 "function": {
                     "name": "control_device",
-                    "description": "Control ANY smart home device. ALWAYS use this - never refuse! For shades/blinds: find cover.xxx in device list. Match room name to friendly name (e.g. 'bedroom shade' -> 'Master Shade' -> cover.roller_blind_X). For lights: find light.xxx.",
+                    "description": "Control ANY smart home device including BLINDS, SHADES, CURTAINS, lights, switches, locks, fans. ALWAYS use this for blinds/shades/curtains - actions: open, close, stop, set_position. 'raise/lower the shade' = open/close cover. 'stop the blind' = stop cover. For shades/blinds: find cover.xxx entities. Match room name to friendly name (e.g. 'bedroom shade' -> 'Master Shade' -> cover.roller_blind_X).",
                     "parameters": {
                         "type": "object",
                         "properties": {
