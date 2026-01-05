@@ -49,7 +49,6 @@ from .const import (
     DEFAULT_PROVIDER,
     DEFAULT_API_KEY,
     # Native intents
-    CONF_EXCLUDED_INTENTS,
     CONF_CUSTOM_EXCLUDED_INTENTS,
     CONF_SYSTEM_PROMPT,
     CONF_ENABLE_ASSIST,
@@ -108,7 +107,6 @@ from .const import (
     DEFAULT_ROOM_PLAYER_MAPPING,
     DEFAULT_LAST_ACTIVE_SPEAKER,
     CAMERA_FRIENDLY_NAMES,
-    ALL_NATIVE_INTENTS,
     # Thermostat settings
     CONF_THERMOSTAT_MIN_TEMP,
     CONF_THERMOSTAT_MAX_TEMP,
@@ -128,11 +126,6 @@ _LOGGER = logging.getLogger(__name__)
 # =============================================================================
 # CONFIGURATION CONSTANTS - Now loaded from config, with fallback defaults
 # =============================================================================
-
-# Default location (used when custom location not set and HA location unavailable)
-DEFAULT_LATITUDE = 0.0
-DEFAULT_LONGITUDE = 0.0
-
 
 # SPEED OPTIMIZATION PATTERNS
 SIMPLE_QUERY_PATTERNS = [
@@ -218,56 +211,6 @@ def calculate_distance_miles(lat1: float, lon1: float, lat2: float, lon2: float)
     c = 2 * asin(sqrt(a))
     
     return 3956 * c  # Earth's radius in miles
-
-
-async def fetch_wikidata_birthdate(session: aiohttp.ClientSession, wikibase_item: str) -> dict | None:
-    """
-    Fetch birthdate from Wikidata for a given Wikibase item ID.
-    Returns dict with 'birthdate' and 'age' or None if not found.
-    """
-    try:
-        headers = {"User-Agent": "HomeAssistant-PolyVoice/1.0"}
-        wikidata_url = f"https://www.wikidata.org/wiki/Special:EntityData/{wikibase_item}.json"
-
-        async with session.get(wikidata_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-            if resp.status != 200:
-                return None
-            wd_data = await resp.json()
-
-        entity = wd_data.get("entities", {}).get(wikibase_item, {})
-        claims = entity.get("claims", {})
-
-        # P569 is birth date property in Wikidata
-        if "P569" not in claims:
-            return None
-
-        birth_claim = claims["P569"][0]
-        time_value = birth_claim.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("time", "")
-
-        if not time_value:
-            return None
-
-        # Parse Wikidata date format: +YYYY-MM-DDTHH:MM:SSZ
-        match = re.match(r'\+(\d{4})-(\d{2})-(\d{2})', time_value)
-        if not match:
-            return None
-
-        year, month, day = int(match.group(1)), int(match.group(2)), int(match.group(3))
-        birthdate = datetime(year, month, day)
-
-        today = datetime.now()
-        age = today.year - birthdate.year
-        if (today.month, today.day) < (birthdate.month, birthdate.day):
-            age -= 1
-
-        return {
-            "birthdate": birthdate,
-            "birthdate_formatted": birthdate.strftime("%B %d, %Y"),
-            "age": age,
-        }
-    except Exception as e:
-        _LOGGER.warning("Wikidata fetch error: %s", e)
-        return None
 
 
 def find_entity_by_name(hass: HomeAssistant, query: str, device_aliases: dict) -> tuple[str | None, str | None]:
