@@ -226,11 +226,12 @@ CONF_CUSTOM_EXCLUDED_INTENTS: Final = "custom_excluded_intents"
 CONF_ENABLE_ASSIST: Final = "enable_assist"
 
 DEFAULT_EXCLUDED_INTENTS: Final = [
-    "HassGetState",
-    "HassNevermind",
-    "HassClimateGetTemperature",
-    "HassClimateSetTemperature",
-    "HassTimerStatus",
+    "HassGetState",           # Use check_device_status for richer responses
+    "HassNevermind",          # Let LLM handle conversationally
+    "HassClimateGetTemperature",  # Use control_thermostat
+    "HassClimateSetTemperature",  # Use control_thermostat
+    "HassTimerStatus",        # Let LLM handle
+    "HassSetPosition",        # Use control_device for blinds/covers
 ]
 DEFAULT_CUSTOM_EXCLUDED_INTENTS: Final = ""
 DEFAULT_ENABLE_ASSIST: Final = True
@@ -255,20 +256,6 @@ ALL_NATIVE_INTENTS: Final = [
     "HassTurnOn",
     "HassVacuumReturnToBase",
     "HassVacuumStart",
-]
-
-# =============================================================================
-# BLINDS/SHADES DETECTION KEYWORDS
-# =============================================================================
-# Keywords that indicate a blinds/shades command - bypass native intents
-BLINDS_KEYWORDS: Final = [
-    "blind", "blinds", "shade", "shades", "curtain", "curtains",
-    "drape", "drapes", "roller", "window cover", "window shade",
-]
-
-BLINDS_ACTION_KEYWORDS: Final = [
-    "raise", "lower", "open", "close", "stop", "halt",
-    "halfway", "half", "favorite", "my position", "preset",
 ]
 
 # =============================================================================
