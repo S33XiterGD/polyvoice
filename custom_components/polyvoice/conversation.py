@@ -151,9 +151,11 @@ MUSIC_COMMAND_PATTERNS = frozenset([
     # Play commands
     "play ", "play music", "play some", "put on ", "shuffle ",
     "play artist", "play song", "play album", "play playlist",
-    # Skip/navigation commands
-    "skip", "next song", "next track", "previous song", "previous track",
+    # Skip/navigation commands - catch all variations
+    "skip", "next", "previous", "go back", "next song", "next track",
+    "previous song", "previous track", "skip this",
     # Pause/resume/stop commands
+    "pause", "resume", "stop", "unpause",
     "pause music", "pause the music", "resume music", "resume the music",
     "stop music", "stop the music",
 ])
