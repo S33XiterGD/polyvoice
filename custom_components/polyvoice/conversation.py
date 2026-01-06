@@ -145,6 +145,24 @@ API_TIMEOUT = 15
 # Bad responses that indicate HA misunderstood - used to filter native intent fallback
 BAD_NATIVE_RESPONSES = frozenset(["no timers", "no timer", "don't understand", "sorry"])
 
+# Music command patterns - skip native intent to avoid double-play with Music Assistant
+# Native intent executes BEFORE we can check if it should be excluded, causing double playback
+MUSIC_COMMAND_PATTERNS = frozenset([
+    # Play commands
+    "play ", "play music", "play some", "put on ", "shuffle ",
+    "play artist", "play song", "play album", "play playlist",
+    # Skip/navigation commands - catch all variations
+    "skip", "next", "previous", "go back", "next song", "next track",
+    "previous song", "previous track", "skip this",
+    # Restart track commands ("bring it back")
+    "bring it back", "play from beginning", "start the song over",
+    "restart the song", "start over", "from the top", "replay this",
+    # Pause/resume/stop commands
+    "pause", "resume", "stop", "unpause",
+    "pause music", "pause the music", "resume music", "resume the music",
+    "stop music", "stop the music",
+])
+
 # CAMERA_FRIENDLY_NAMES is now imported from const.py
 
 # =============================================================================
@@ -318,6 +336,11 @@ class LMStudioConversationEntity(ConversationEntity):
         # System prompt cache (keyed by date since it includes current date)
         self._cached_system_prompt: str | None = None
         self._cached_system_prompt_date: str | None = None
+
+        # Music command debouncing - prevent double-execution from repeated triggers
+        self._last_music_command: str | None = None
+        self._last_music_command_time: datetime | None = None
+        self._music_debounce_seconds = 5  # Ignore same command within 5 seconds
 
         # Initialize config
         self._update_from_config({**config_entry.data, **config_entry.options})
@@ -917,14 +940,14 @@ class LMStudioConversationEntity(ConversationEntity):
                 "type": "function",
                 "function": {
                     "name": "control_music",
-                    "description": f"Control MUSIC playback ONLY via Music Assistant. Rooms: {rooms_list}. Actions: play, pause, resume, stop, skip_next, skip_previous, what_playing, transfer, shuffle. IMPORTANT: This is ONLY for music/audio. Do NOT use for blinds, shades, curtains, or any physical devices - use control_device for those!",
+                    "description": f"Control MUSIC playback ONLY via Music Assistant. Rooms: {rooms_list}. Actions: play, pause, resume, stop, skip_next, skip_previous, restart_track, what_playing, transfer, shuffle. IMPORTANT: This is ONLY for music/audio. Do NOT use for blinds, shades, curtains, or any physical devices - use control_device for those!",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "action": {
                                 "type": "string",
-                                "enum": ["play", "pause", "resume", "stop", "skip_next", "skip_previous", "what_playing", "transfer", "shuffle"],
-                                "description": "The music action to perform. Use 'shuffle' to search for a playlist and play it shuffled."
+                                "enum": ["play", "pause", "resume", "stop", "skip_next", "skip_previous", "restart_track", "what_playing", "transfer", "shuffle"],
+                                "description": "The music action to perform. Use 'shuffle' to search for a playlist and play it shuffled. Use 'restart_track' to replay the current song from the beginning (triggered by 'bring it back', 'play from beginning', 'start the song over')."
                             },
                             "query": {"type": "string", "description": "What to play (artist, album, track, playlist, or genre). For shuffle, this searches for matching playlists."},
                             "room": {"type": "string", "description": f"Target room: {rooms_list}"},
@@ -1023,11 +1046,30 @@ class LMStudioConversationEntity(ConversationEntity):
     ) -> conversation.ConversationResult:
         """Process a sentence."""
         conversation_id = user_input.conversation_id or ulid.ulid_now()
-        
+
         # Store original query for tools to access (for reliable device name extraction)
         self._current_user_query = user_input.text
 
         _LOGGER.info("=== Incoming request: '%s' (conv_id: %s) ===", user_input.text, conversation_id[:8])
+
+        # MUSIC COOLDOWN: After any music action, ignore ALL voice commands for cooldown period
+        # This prevents false wake word triggers from Chromecast audio causing unwanted actions
+        text_lower = user_input.text.lower() if user_input.text else ""
+        if self._last_music_command_time:
+            elapsed = (datetime.now() - self._last_music_command_time).total_seconds()
+            if elapsed < self._music_debounce_seconds:
+                # Check if this looks like a music command OR is gibberish/short (likely false trigger)
+                is_music_cmd = any(pattern in text_lower for pattern in MUSIC_COMMAND_PATTERNS)
+                is_likely_false_trigger = len(text_lower) < 15 or not any(c.isalpha() for c in text_lower)
+                if is_music_cmd or is_likely_false_trigger:
+                    _LOGGER.info("COOLDOWN: Ignoring command '%s' (%.1fs after music action)",
+                                user_input.text[:30], elapsed)
+                    intent_response = intent.IntentResponse(language=user_input.language)
+                    intent_response.async_set_speech("")
+                    return conversation.ConversationResult(
+                        response=intent_response,
+                        conversation_id=conversation_id,
+                    )
 
         # Try native intents first, fall back to LLM if they fail
         native_result = await self._try_native_intent(user_input, conversation_id)
@@ -1077,6 +1119,13 @@ class LMStudioConversationEntity(ConversationEntity):
         self, user_input: conversation.ConversationInput, conversation_id: str
     ) -> conversation.ConversationResult | None:
         """Try to handle with native intent system using HA's built-in conversation agent."""
+        # Skip native intent for music commands - native handler executes BEFORE we can
+        # check if intent is excluded, causing double playback with Music Assistant
+        text_lower = user_input.text.lower()
+        if any(pattern in text_lower for pattern in MUSIC_COMMAND_PATTERNS):
+            _LOGGER.debug("Skipping native intent for music command: %s", user_input.text[:50])
+            return None
+
         try:
             # Use HA's default conversation agent to parse and handle intent
             result = await conversation.async_converse(
@@ -3965,6 +4014,24 @@ class LMStudioConversationEntity(ConversationEntity):
 
             _LOGGER.debug("Music control: action=%s, room=%s, query=%s", action, room, query)
 
+            # Update cooldown timestamp for ALL music actions
+            # This triggers the cooldown in async_process to block false wake word triggers
+            now = datetime.now()
+
+            # Debounce specific actions to prevent double-execution of the same command
+            debounce_actions = {"skip_next", "skip_previous", "restart_track", "pause", "resume", "stop"}
+            if action in debounce_actions:
+                if (self._last_music_command == action and
+                    self._last_music_command_time and
+                    (now - self._last_music_command_time).total_seconds() < self._music_debounce_seconds):
+                    _LOGGER.info("DEBOUNCE: Ignoring duplicate '%s' command within %s seconds",
+                                action, self._music_debounce_seconds)
+                    return {"status": "debounced", "message": f"Command '{action}' ignored (duplicate)"}
+
+            # Set cooldown for ALL music actions (play, skip, pause, etc.)
+            self._last_music_command = action
+            self._last_music_command_time = now
+
             players = self.room_player_mapping  # {room: entity_id}
             all_players = list(players.values())
 
@@ -4083,6 +4150,15 @@ class LMStudioConversationEntity(ConversationEntity):
                     if playing:
                         await self.hass.services.async_call("media_player", "media_previous_track", {"entity_id": playing})
                         return {"status": "skipped", "message": "Previous track"}
+                    return {"error": "No music is playing"}
+
+                elif action == "restart_track":
+                    # Restart the current song from the beginning ("bring it back")
+                    _LOGGER.info("Looking for player in 'playing' state to restart track...")
+                    playing = find_player_by_state("playing")
+                    if playing:
+                        await self.hass.services.async_call("media_player", "media_seek", {"entity_id": playing, "seek_position": 0})
+                        return {"status": "restarted", "message": "Bringing it back from the top"}
                     return {"error": "No music is playing"}
 
                 elif action == "what_playing":
