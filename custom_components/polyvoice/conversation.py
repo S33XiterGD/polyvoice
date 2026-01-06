@@ -145,6 +145,13 @@ API_TIMEOUT = 15
 # Bad responses that indicate HA misunderstood - used to filter native intent fallback
 BAD_NATIVE_RESPONSES = frozenset(["no timers", "no timer", "don't understand", "sorry"])
 
+# Music command patterns - skip native intent to avoid double-play with Music Assistant
+# Native intent executes BEFORE we can check if it should be excluded, causing double playback
+MUSIC_COMMAND_PATTERNS = frozenset([
+    "play ", "play music", "play some", "put on ", "shuffle ",
+    "play artist", "play song", "play album", "play playlist",
+])
+
 # CAMERA_FRIENDLY_NAMES is now imported from const.py
 
 # =============================================================================
@@ -1077,6 +1084,13 @@ class LMStudioConversationEntity(ConversationEntity):
         self, user_input: conversation.ConversationInput, conversation_id: str
     ) -> conversation.ConversationResult | None:
         """Try to handle with native intent system using HA's built-in conversation agent."""
+        # Skip native intent for music commands - native handler executes BEFORE we can
+        # check if intent is excluded, causing double playback with Music Assistant
+        text_lower = user_input.text.lower()
+        if any(pattern in text_lower for pattern in MUSIC_COMMAND_PATTERNS):
+            _LOGGER.debug("Skipping native intent for music command: %s", user_input.text[:50])
+            return None
+
         try:
             # Use HA's default conversation agent to parse and handle intent
             result = await conversation.async_converse(
