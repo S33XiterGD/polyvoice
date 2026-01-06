@@ -148,8 +148,14 @@ BAD_NATIVE_RESPONSES = frozenset(["no timers", "no timer", "don't understand", "
 # Music command patterns - skip native intent to avoid double-play with Music Assistant
 # Native intent executes BEFORE we can check if it should be excluded, causing double playback
 MUSIC_COMMAND_PATTERNS = frozenset([
+    # Play commands
     "play ", "play music", "play some", "put on ", "shuffle ",
     "play artist", "play song", "play album", "play playlist",
+    # Skip/navigation commands
+    "skip", "next song", "next track", "previous song", "previous track",
+    # Pause/resume/stop commands
+    "pause music", "pause the music", "resume music", "resume the music",
+    "stop music", "stop the music",
 ])
 
 # CAMERA_FRIENDLY_NAMES is now imported from const.py
