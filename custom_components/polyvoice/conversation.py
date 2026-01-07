@@ -828,7 +828,7 @@ class LMStudioConversationEntity(ConversationEntity):
 
             elif tool_name == "get_ufc_info":
                 return await sports_tool.get_ufc_info(
-                    arguments, self._session, self._track_api_call
+                    arguments, self._session, hass_tz, self._track_api_call
                 )
 
             elif tool_name == "get_stock_price":
