@@ -538,13 +538,32 @@ async def control_device(
             if domain == "cover" and action == "set_position" and position is not None:
                 service_data["position"] = max(0, min(100, position))
 
-            # Cover preset/favorite - use entity's preset_position attribute
+            # Cover preset/favorite - try button entity first, then set_position
             if domain == "cover" and action == "preset":
-                state = hass.states.get(entity_id)
-                preset_pos = state.attributes.get("preset_position") if state else None
-                if preset_pos is None and state:
-                    preset_pos = state.attributes.get("favorite_position")
-                service_data["position"] = preset_pos if preset_pos is not None else 50
+                # Look for a my_position button entity (common with some shade integrations)
+                cover_object_id = entity_id.split(".")[1]
+                my_position_button = f"button.{cover_object_id}_my_position"
+                favorite_button = f"button.{cover_object_id}_favorite_position"
+
+                button_entity = None
+                if hass.states.get(my_position_button):
+                    button_entity = my_position_button
+                elif hass.states.get(favorite_button):
+                    button_entity = favorite_button
+
+                if button_entity:
+                    # Use the button instead of set_cover_position
+                    await hass.services.async_call("button", "press", {"entity_id": button_entity}, blocking=True)
+                    controlled.append(friendly_name)
+                    _LOGGER.info("Device control: button.press on %s via %s", friendly_name, button_entity)
+                    continue  # Skip the normal service call below
+                else:
+                    # Fall back to set_cover_position
+                    state = hass.states.get(entity_id)
+                    preset_pos = state.attributes.get("preset_position") if state else None
+                    if preset_pos is None and state:
+                        preset_pos = state.attributes.get("favorite_position")
+                    service_data["position"] = preset_pos if preset_pos is not None else 50
 
             await hass.services.async_call(domain, service, service_data, blocking=True)
             controlled.append(friendly_name)
