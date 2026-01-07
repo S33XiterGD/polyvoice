@@ -1142,11 +1142,14 @@ class LMStudioConversationEntity(ConversationEntity):
         # CRITICAL: Check excluded intents BEFORE calling async_converse()
         # async_converse() EXECUTES the intent, so checking after is too late!
         # Build skip patterns from user's excluded intents list
+        _LOGGER.info("EXCLUDED INTENTS CHECK - text: '%s', excluded_intents: %s", text_lower, self.excluded_intents)
         for excluded_intent in self.excluded_intents:
             patterns = INTENT_PATTERNS.get(excluded_intent, [])
-            if any(pattern in text_lower for pattern in patterns):
-                _LOGGER.debug("Skipping native intent (excluded: %s) for: %s", excluded_intent, user_input.text[:50])
-                return None
+            _LOGGER.info("Checking intent %s with patterns: %s", excluded_intent, patterns)
+            for pattern in patterns:
+                if pattern in text_lower:
+                    _LOGGER.info("MATCH FOUND! Pattern '%s' in '%s' - skipping native intent", pattern, text_lower)
+                    return None
 
         # Skip native intent for music commands - avoid double-play with Music Assistant
         if any(pattern in text_lower for pattern in MUSIC_COMMAND_PATTERNS):
