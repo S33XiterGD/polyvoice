@@ -289,6 +289,7 @@ GENERAL GUIDELINES:
 - For camera checks: use check_camera for detailed view, quick_camera_check for fast "is anyone there" queries
 - For thermostat control, use control_thermostat
 - For device status, use check_device_status
+- For BLINDS/SHADES/COVERS control, ALWAYS call control_device with the action (open, close, favorite, preset, set_position). NEVER assume current state - always execute the command.
 - For sports questions, ALWAYS call get_sports_info (never answer from memory)
 - For Wikipedia/knowledge questions, use get_wikipedia_summary
 - For age questions, use calculate_age (never guess ages)
