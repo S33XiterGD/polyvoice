@@ -326,12 +326,13 @@ class LMStudioConversationEntity(ConversationEntity):
         if self.enable_music and self.room_player_mapping:
             self._music_controller = MusicController(self.hass, self.room_player_mapping)
 
-        # Register intent handlers
-        if self.excluded_intents:
+        # Register intent handlers for excluded intents AND/OR entity-based control
+        if self.excluded_intents or self.llm_controlled_entities:
             self._original_intent_handlers = register_intent_handlers(
                 self.hass,
                 self.entity_id,
                 self.excluded_intents,
+                self.llm_controlled_entities,
             )
 
         # Listen for config updates
