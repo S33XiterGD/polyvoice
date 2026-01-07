@@ -203,6 +203,116 @@ INTENT_PATTERNS = {
 # CAMERA_FRIENDLY_NAMES is now imported from const.py
 
 # =============================================================================
+# EXCLUDED INTENT HANDLER - Intercepts built-in intents and routes to PolyVoice LLM
+# =============================================================================
+
+class PolyVoiceIntentHandler(intent.IntentHandler):
+    """Intent handler that redirects excluded intents to PolyVoice LLM.
+
+    When registered, this REPLACES the built-in HA intent handler for the given intent type.
+    This allows PolyVoice to intercept commands that would otherwise be handled by HA's
+    native intent system (which fires BEFORE the conversation agent is called).
+    """
+
+    def __init__(self, intent_type: str, polyvoice_agent: "LMStudioConversationEntity") -> None:
+        """Initialize the handler."""
+        self.intent_type = intent_type
+        self._agent = polyvoice_agent
+        self.description = f"PolyVoice handler for {intent_type}"
+
+    async def async_handle(self, intent_obj: intent.Intent) -> intent.IntentResponse:
+        """Handle the intent by routing to PolyVoice LLM."""
+        _LOGGER.info("PolyVoice intercepting excluded intent: %s", self.intent_type)
+
+        # Get the original text from the intent
+        original_text = intent_obj.text_input or ""
+
+        if not original_text:
+            # Reconstruct from intent type and slots if text_input not available
+            original_text = self._reconstruct_command(intent_obj)
+
+        _LOGGER.debug("Routing to LLM with text: %s", original_text)
+
+        # Create a fake ConversationInput to pass to our LLM
+        user_input = conversation.ConversationInput(
+            text=original_text,
+            context=intent_obj.context,
+            conversation_id=None,
+            device_id=intent_obj.device_id,
+            language=intent_obj.language,
+        )
+
+        # Call the LLM directly (skip native intent check since we ARE the handler)
+        tools = self._agent._tools
+        dynamic_max_tokens = self._agent._get_dynamic_max_tokens(original_text, tools)
+
+        try:
+            response_text = await self._agent._call_llm_streaming(
+                conversation_id="excluded_intent",
+                tools=tools,
+                user_input=user_input,
+                max_tokens=dynamic_max_tokens,
+            )
+
+            # Create successful response
+            response = intent_obj.create_response()
+            response.async_set_speech(response_text)
+            return response
+
+        except Exception as err:
+            _LOGGER.error("Error handling excluded intent via LLM: %s", err)
+            response = intent_obj.create_response()
+            response.async_set_speech(f"Sorry, I had trouble processing that: {err}")
+            return response
+
+    def _reconstruct_command(self, intent_obj: intent.Intent) -> str:
+        """Reconstruct a natural language command from intent slots."""
+        slots = intent_obj.slots
+
+        # Get entity name from slots
+        name_slot = slots.get("name", {})
+        entity_name = name_slot.get("text") or name_slot.get("value") or ""
+
+        # Get area from slots
+        area_slot = slots.get("area", {})
+        area_name = area_slot.get("text") or area_slot.get("value") or ""
+
+        # Build command based on intent type
+        intent_type = self.intent_type
+
+        if intent_type == "HassTurnOn":
+            return f"turn on {entity_name or area_name}".strip()
+        elif intent_type == "HassTurnOff":
+            return f"turn off {entity_name or area_name}".strip()
+        elif intent_type == "HassOpenCover":
+            return f"open {entity_name or area_name}".strip()
+        elif intent_type == "HassCloseCover":
+            return f"close {entity_name or area_name}".strip()
+        elif intent_type == "HassLightSet":
+            brightness = slots.get("brightness", {}).get("value", "")
+            color = slots.get("color", {}).get("value", "")
+            if brightness:
+                return f"set {entity_name or area_name} brightness to {brightness}".strip()
+            elif color:
+                return f"set {entity_name or area_name} to {color}".strip()
+            return f"adjust {entity_name or area_name}".strip()
+        elif intent_type == "HassSetPosition":
+            position = slots.get("position", {}).get("value", "")
+            return f"set {entity_name or area_name} to {position} percent".strip()
+        elif intent_type == "HassMediaPause":
+            return f"pause {entity_name or area_name or 'music'}".strip()
+        elif intent_type == "HassMediaUnpause":
+            return f"resume {entity_name or area_name or 'music'}".strip()
+        elif intent_type == "HassMediaNext":
+            return "next track"
+        elif intent_type == "HassMediaPrevious":
+            return "previous track"
+        else:
+            # Generic fallback
+            return f"{intent_type.replace('Hass', '').lower()} {entity_name or area_name}".strip()
+
+
+# =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
 
@@ -379,6 +489,9 @@ class LMStudioConversationEntity(ConversationEntity):
         self._last_music_command_time: datetime | None = None
         self._music_debounce_seconds = 5  # Ignore same command within 5 seconds
         self._last_paused_player: str | None = None  # Track which player we paused for smart resume
+
+        # Track original intent handlers so we can restore them on unload
+        self._original_intent_handlers: dict[str, intent.IntentHandler | None] = {}
 
         # Initialize config
         self._update_from_config({**config_entry.data, **config_entry.options})
@@ -657,17 +770,102 @@ class LMStudioConversationEntity(ConversationEntity):
         self.entry.async_on_unload(
             self.entry.add_update_listener(self._async_entry_updated)
         )
-        
+
         # Get shared aiohttp session (HUGE perf boost - reuses TCP connections!)
         self._session = async_get_clientsession(self.hass)
-        
+
         # Register usage tracking sensors
         self._update_usage_sensors()
 
+        # Register custom intent handlers to intercept excluded intents
+        # This OVERWRITES HA's built-in handlers, routing them to PolyVoice LLM instead
+        await self._register_excluded_intent_handlers()
+
+        # Add cleanup callback to restore original handlers on unload
+        self.entry.async_on_unload(self._restore_original_intent_handlers)
+
+    async def _register_excluded_intent_handlers(self) -> None:
+        """Register custom handlers for excluded intents.
+
+        This is the KEY to making excluded intents work:
+        - HA's voice pipeline with prefer_local_intents=True calls async_handle_intents
+          on the DEFAULT agent BEFORE calling the conversation agent's async_process
+        - If a built-in intent matches, it fires immediately and async_process is NEVER called
+        - By registering our own handlers that OVERWRITE the built-in ones, we intercept
+          these intents and route them to our LLM instead
+        """
+        if not self.excluded_intents:
+            _LOGGER.debug("No excluded intents configured, skipping handler registration")
+            return
+
+        # Get the current intent handlers registry
+        intents_registry = self.hass.data.get(intent.DATA_KEY, {})
+
+        _LOGGER.info(
+            "Registering PolyVoice handlers for excluded intents: %s",
+            self.excluded_intents
+        )
+
+        for intent_type in self.excluded_intents:
+            # Store the original handler so we can restore it on unload
+            original_handler = intents_registry.get(intent_type)
+            self._original_intent_handlers[intent_type] = original_handler
+
+            # Register our custom handler that routes to LLM
+            handler = PolyVoiceIntentHandler(intent_type, self)
+            intent.async_register(self.hass, handler)
+
+            _LOGGER.info(
+                "Registered PolyVoice handler for %s (replaced: %s)",
+                intent_type,
+                original_handler.__class__.__name__ if original_handler else "None"
+            )
+
+    def _restore_original_intent_handlers(self) -> None:
+        """Restore original intent handlers on unload.
+
+        This ensures that when PolyVoice is removed/reloaded, the built-in
+        intent handlers are restored to their original behavior.
+        """
+        if not self._original_intent_handlers:
+            return
+
+        _LOGGER.info("Restoring original intent handlers...")
+
+        intents_registry = self.hass.data.get(intent.DATA_KEY, {})
+        if not intents_registry:
+            return
+
+        for intent_type, original_handler in self._original_intent_handlers.items():
+            if original_handler is not None:
+                # Restore the original handler
+                intent.async_register(self.hass, original_handler)
+                _LOGGER.debug("Restored original handler for %s", intent_type)
+            else:
+                # No original handler - remove our handler
+                intents_registry.pop(intent_type, None)
+                _LOGGER.debug("Removed PolyVoice handler for %s (no original)", intent_type)
+
+        self._original_intent_handlers.clear()
+
     async def _async_entry_updated(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Handle config entry update."""
+        # Store old excluded intents to detect changes
+        old_excluded_intents = self.excluded_intents.copy() if self.excluded_intents else set()
+
         self._update_from_config({**entry.data, **entry.options})
         self.async_write_ha_state()
+
+        # If excluded intents changed, update the handlers
+        if old_excluded_intents != self.excluded_intents:
+            _LOGGER.info(
+                "Excluded intents changed from %s to %s - re-registering handlers",
+                old_excluded_intents, self.excluded_intents
+            )
+            # Restore original handlers first
+            self._restore_original_intent_handlers()
+            # Register new handlers
+            await self._register_excluded_intent_handlers()
 
     def _update_usage_sensors(self) -> None:
         """Update usage tracking sensors in Home Assistant."""
@@ -1081,29 +1279,24 @@ class LMStudioConversationEntity(ConversationEntity):
     async def async_process(
         self, user_input: conversation.ConversationInput
     ) -> conversation.ConversationResult:
-        """Process a sentence."""
+        """Process a sentence.
+
+        NOTE: For excluded intents, our PolyVoiceIntentHandler intercepts them at the
+        pipeline level (in async_handle_intents) BEFORE this method is called.
+        This method is only reached for commands that:
+        1. Didn't match any local intent (strict matching failed)
+        2. Matched a local intent that's NOT in excluded_intents
+        """
         conversation_id = user_input.conversation_id or ulid.ulid_now()
 
         # Store original query for tools to access (for reliable device name extraction)
         self._current_user_query = user_input.text
 
-        # Check if command matches an excluded intent pattern - skip native if so
-        text_lower = user_input.text.lower()
-        skip_native = False
-
-        # Build skip patterns dynamically from excluded intents
-        for excluded in self.excluded_intents:
-            patterns = INTENT_PATTERNS.get(excluded, [])
-            if any(p in text_lower for p in patterns):
-                _LOGGER.error("EXCLUDED INTENT MATCH: %s - skipping native", excluded)
-                skip_native = True
-                break
-
-        # Try native intents first (unless excluded), fall back to LLM
-        if not skip_native:
-            native_result = await self._try_native_intent(user_input, conversation_id)
-            if native_result is not None:
-                return native_result
+        # Try native intents first, fall back to LLM
+        # NOTE: Music/cover command patterns are checked inside _try_native_intent
+        native_result = await self._try_native_intent(user_input, conversation_id)
+        if native_result is not None:
+            return native_result
 
         # Native intent didn't handle it - use LLM with tools (including control_device for fuzzy matching)
         tools = self._tools
@@ -1147,10 +1340,15 @@ class LMStudioConversationEntity(ConversationEntity):
     async def _try_native_intent(
         self, user_input: conversation.ConversationInput, conversation_id: str
     ) -> conversation.ConversationResult | None:
-        """Try to handle with native intent system using HA's built-in conversation agent."""
-        text_lower = user_input.text.lower()
+        """Try to handle with native intent system using HA's built-in conversation agent.
 
-        # NOTE: Excluded intents are now checked in async_process BEFORE this is called
+        This is a FALLBACK for commands that didn't match during pipeline's strict intent
+        matching. We try the HA conversation agent here which may use less strict matching.
+
+        NOTE: Excluded intents are intercepted at the pipeline level by our
+        PolyVoiceIntentHandler, so they never reach this method.
+        """
+        text_lower = user_input.text.lower()
 
         # Skip native intent for music commands - avoid double-play with Music Assistant
         if any(pattern in text_lower for pattern in MUSIC_COMMAND_PATTERNS):
@@ -1172,18 +1370,8 @@ class LMStudioConversationEntity(ConversationEntity):
                 language=user_input.language,
                 agent_id="conversation.home_assistant",  # Full entity ID
             )
-            
+
             _LOGGER.debug("Native converse response_type: %s", result.response.response_type)
-
-            # Check if we got an intent result
-            if hasattr(result.response, 'intent') and result.response.intent is not None:
-                intent_type = result.response.intent.intent_type
-                _LOGGER.debug("Native intent matched: %s", intent_type)
-
-                # Check if this intent is in our excluded list
-                if intent_type in self.excluded_intents:
-                    _LOGGER.debug("Intent excluded, sending to LLM: %s", intent_type)
-                    return None
 
             # ACTION_DONE = command executed (turn on light, etc)
             if result.response.response_type == intent.IntentResponseType.ACTION_DONE:
