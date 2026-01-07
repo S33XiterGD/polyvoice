@@ -893,7 +893,7 @@ class LMStudioOptionsFlowHandler(config_entries.OptionsFlow):
             description_placeholders={"aliases": description},
             data_schema=vol.Schema(
                 {
-                    vol.Optional("select_alias", default=""): selector.SelectSelector(
+                    vol.Optional("select_alias"): selector.SelectSelector(
                         selector.SelectSelectorConfig(
                             options=select_options,
                             mode=selector.SelectSelectorMode.DROPDOWN,
@@ -997,7 +997,7 @@ class LMStudioOptionsFlowHandler(config_entries.OptionsFlow):
             description_placeholders={"mappings": description},
             data_schema=vol.Schema(
                 {
-                    vol.Optional("select_room", default=""): selector.SelectSelector(
+                    vol.Optional("select_room"): selector.SelectSelector(
                         selector.SelectSelectorConfig(
                             options=select_options,
                             mode=selector.SelectSelectorMode.DROPDOWN,
