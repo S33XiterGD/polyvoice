@@ -538,18 +538,23 @@ async def control_device(
             if domain == "cover" and action == "set_position" and position is not None:
                 service_data["position"] = max(0, min(100, position))
 
-            # Cover preset/favorite - try button entity first, then set_position
+            # Cover preset/favorite - try to find a related button entity, then fall back to set_position
             if domain == "cover" and action == "preset":
-                # Look for a my_position button entity (common with some shade integrations)
-                cover_object_id = entity_id.split(".")[1]
-                my_position_button = f"button.{cover_object_id}_my_position"
-                favorite_button = f"button.{cover_object_id}_favorite_position"
-
+                # Find button entities on the same device that handle preset/favorite/my position
                 button_entity = None
-                if hass.states.get(my_position_button):
-                    button_entity = my_position_button
-                elif hass.states.get(favorite_button):
-                    button_entity = favorite_button
+                cover_entry = ent_reg.async_get(entity_id)
+
+                if cover_entry and cover_entry.device_id:
+                    # Search for button entities on the same device
+                    position_keywords = ["my_position", "favorite", "preset", "my position"]
+                    for entry in ent_reg.entities.values():
+                        if (entry.device_id == cover_entry.device_id and
+                            entry.entity_id.startswith("button.") and
+                            any(kw in entry.entity_id.lower() or
+                                (entry.original_name and kw in entry.original_name.lower())
+                                for kw in position_keywords)):
+                            button_entity = entry.entity_id
+                            break
 
                 if button_entity:
                     # Use the button instead of set_cover_position
