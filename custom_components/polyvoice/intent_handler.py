@@ -134,7 +134,10 @@ class PolyVoiceIntentHandler(IntentHandler):
         from .utils.fuzzy_matching import find_entity_by_name
 
         if not hasattr(intent, 'slots') or not intent.slots:
+            _LOGGER.debug("No slots in intent")
             return None
+
+        _LOGGER.debug("Intent slots: %s", intent.slots)
 
         # Get the device name from slots
         name_slot = intent.slots.get("name", {})
@@ -148,9 +151,10 @@ class PolyVoiceIntentHandler(IntentHandler):
                 device_name = value
 
         if not device_name:
+            _LOGGER.debug("Could not extract device_name from slots")
             return None
 
-        _LOGGER.debug("Looking for Smart Device matching '%s'", device_name)
+        _LOGGER.info("Extracted device_name='%s' from intent slots", device_name)
 
         # Build aliases dict for fuzzy matching:
         # 1. Friendly names of all Smart Devices (llm_controlled_entities)
@@ -171,10 +175,14 @@ class PolyVoiceIntentHandler(IntentHandler):
             if entity_id in self._llm_controlled_entities:
                 entity_aliases[alias_name.lower()] = entity_id
 
+        _LOGGER.info("Smart Device aliases for matching: %s", entity_aliases)
+
         # Use PolyVoice's fuzzy matching (handles synonyms like blind/shade)
         matched_id, matched_name = find_entity_by_name(
             self._hass, device_name, entity_aliases
         )
+
+        _LOGGER.info("Fuzzy match result: matched_id=%s, matched_name=%s", matched_id, matched_name)
 
         # Only return if matched entity is a Smart Device
         if matched_id and matched_id in self._llm_controlled_entities:
