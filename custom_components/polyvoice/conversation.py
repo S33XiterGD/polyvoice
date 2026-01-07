@@ -1077,7 +1077,22 @@ class LMStudioConversationEntity(ConversationEntity):
         - By registering our own handlers that OVERWRITE the built-in ones, we intercept
           these intents and route them to our LLM instead
         """
-        if not self.excluded_intents:
+        # Start with user-configured excluded intents
+        effective_excluded_intents = set(self.excluded_intents) if self.excluded_intents else set()
+
+        # If LLM-controlled entities include covers, also intercept generic on/off/toggle
+        # because HA maps "close the blinds" to HassTurnOff, "open the blinds" to HassTurnOn
+        if self.llm_controlled_entities:
+            has_covers = any(eid.startswith("cover.") for eid in self.llm_controlled_entities)
+            if has_covers:
+                generic_intents = {"HassTurnOn", "HassTurnOff", "HassToggle"}
+                _LOGGER.info(
+                    "LLM-controlled entities include covers - adding generic intents: %s",
+                    generic_intents
+                )
+                effective_excluded_intents.update(generic_intents)
+
+        if not effective_excluded_intents:
             _LOGGER.debug("No excluded intents configured, skipping handler registration")
             return
 
@@ -1086,10 +1101,10 @@ class LMStudioConversationEntity(ConversationEntity):
 
         _LOGGER.info(
             "Registering PolyVoice handlers for excluded intents: %s",
-            self.excluded_intents
+            effective_excluded_intents
         )
 
-        for intent_type in self.excluded_intents:
+        for intent_type in effective_excluded_intents:
             # Store the original handler so we can restore it on unload
             original_handler = intents_registry.get(intent_type)
             self._original_intent_handlers[intent_type] = original_handler
