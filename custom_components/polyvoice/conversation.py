@@ -24,6 +24,7 @@ from homeassistant.util import dt as dt_util
 from openai import AsyncOpenAI, AsyncAzureOpenAI
 
 from .const import (
+    DOMAIN,
     CONF_API_KEY,
     CONF_BASE_URL,
     CONF_BLINDS_FAVORITE_BUTTONS,
@@ -183,6 +184,17 @@ class LMStudioConversationEntity(ConversationEntity):
     def supported_languages(self) -> list[str]:
         """Return supported languages (all via LLM)."""
         return ["*"]
+
+    @property
+    def device_info(self):
+        """Return device info."""
+        return {
+            "identifiers": {(DOMAIN, self.entry.entry_id)},
+            "name": self.entry.title,
+            "manufacturer": "LosCV29",
+            "model": "PolyVoice",
+            "entry_type": "service",
+        }
 
     def _update_from_config(self, config: dict[str, Any]) -> None:
         """Update configuration."""
