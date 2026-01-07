@@ -372,7 +372,9 @@ class LMStudioConversationEntity(ConversationEntity):
         user_text = user_input.text.strip()
         self._current_user_query = user_text
 
-        _LOGGER.info("Processing: '%s'", user_text)
+        # DEBUG: Force visible logging
+        _LOGGER.warning("POLYVOICE DEBUG: Processing query: '%s'", user_text)
+        print(f"POLYVOICE DEBUG: Processing query: '{user_text}'")  # Force stdout
 
         # Check for simple queries that don't need LLM
         for pattern, query_type in SIMPLE_QUERY_PATTERNS:
