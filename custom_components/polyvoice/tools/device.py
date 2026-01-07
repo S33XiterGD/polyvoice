@@ -542,6 +542,7 @@ async def control_device(
             if domain == "cover" and action == "preset":
                 # Find button entities on the same device that handle preset/favorite/my position
                 button_entity = None
+                ent_reg = er.async_get(hass)
                 cover_entry = ent_reg.async_get(entity_id)
 
                 if cover_entry and cover_entry.device_id:
