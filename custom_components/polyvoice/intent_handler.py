@@ -9,7 +9,8 @@ import logging
 import re
 from typing import Any, TYPE_CHECKING
 
-from homeassistant.helpers.intent import IntentHandler, IntentResponse, IntentHandlerError
+from homeassistant.helpers.intent import IntentHandler, IntentResponse
+from homeassistant.exceptions import HomeAssistantError
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -87,7 +88,7 @@ class PolyVoiceIntentHandler(IntentHandler):
             _LOGGER.warning("Could not extract command from %s slots, falling back", self._intent_type)
             if self._original_handler:
                 return await self._original_handler.async_handle(intent)
-            raise IntentHandlerError(f"Could not process {self._intent_type} intent")
+            raise HomeAssistantError(f"Could not process {self._intent_type} intent")
 
         _LOGGER.info("PolyVoice processing command: '%s'", command)
 
@@ -105,13 +106,13 @@ class PolyVoiceIntentHandler(IntentHandler):
                 _LOGGER.warning("PolyVoice entity not found or doesn't support interception")
                 if self._original_handler:
                     return await self._original_handler.async_handle(intent)
-                raise IntentHandlerError("PolyVoice entity not available")
+                raise HomeAssistantError("PolyVoice entity not available")
 
         except Exception as err:
             _LOGGER.error("Error processing intercepted intent: %s", err, exc_info=True)
             if self._original_handler:
                 return await self._original_handler.async_handle(intent)
-            raise IntentHandlerError(f"Error processing intent: {err}")
+            raise HomeAssistantError(f"Error processing intent: {err}")
 
     def _extract_command_from_slots(self, slots: dict[str, Any]) -> str | None:
         """Extract a natural language command from intent slots.
@@ -204,18 +205,12 @@ def register_intent_handlers(
         if intent_type not in INTERCEPTED_INTENTS:
             continue
 
-        # Save original handler
-        original = intent_helpers.async_get_handler(hass, intent_type)
-        if original:
-            original_handlers[intent_type] = original
-            _LOGGER.debug("Saved original handler for %s", intent_type)
-
-        # Register our handler
+        # Register our handler (it will override any existing one)
         handler = PolyVoiceIntentHandler(
             intent_type=intent_type,
             hass=hass,
             conversation_entity_id=conversation_entity_id,
-            original_handler=original,
+            original_handler=None,
         )
         intent_helpers.async_register(hass, handler)
         _LOGGER.info("Registered PolyVoice handler for %s intent", intent_type)

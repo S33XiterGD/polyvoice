@@ -1,8 +1,10 @@
 """Update entity for PolyVoice integration."""
 from __future__ import annotations
 
+import json
 import logging
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -23,6 +25,15 @@ _LOGGER = logging.getLogger(__name__)
 
 GITHUB_REPO = "LosCV29/polyvoice"
 SCAN_INTERVAL = timedelta(hours=4)
+
+# Load version once at module import (not in async context)
+_INSTALLED_VERSION = "unknown"
+try:
+    _manifest_path = Path(__file__).parent / "manifest.json"
+    with open(_manifest_path) as _f:
+        _INSTALLED_VERSION = json.load(_f).get("version", "unknown")
+except Exception:
+    pass
 
 
 async def async_setup_entry(
@@ -47,26 +58,10 @@ class PolyVoiceUpdateEntity(UpdateEntity):
         self.hass = hass
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_update"
-        self._installed_version: str | None = None
+        self._installed_version: str | None = _INSTALLED_VERSION
         self._latest_version: str | None = None
         self._release_url: str | None = None
         self._release_notes: str | None = None
-
-        # Load current version from manifest
-        self._load_installed_version()
-
-    def _load_installed_version(self) -> None:
-        """Load the installed version from manifest.json."""
-        try:
-            import json
-            from pathlib import Path
-            manifest_path = Path(__file__).parent / "manifest.json"
-            with open(manifest_path) as f:
-                manifest = json.load(f)
-                self._installed_version = manifest.get("version", "unknown")
-        except Exception as err:
-            _LOGGER.error("Failed to load manifest.json: %s", err)
-            self._installed_version = "unknown"
 
     @property
     def installed_version(self) -> str | None:

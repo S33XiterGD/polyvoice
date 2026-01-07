@@ -24,9 +24,9 @@ from homeassistant.util import dt as dt_util
 from openai import AsyncOpenAI, AsyncAzureOpenAI
 
 from .const import (
+    DOMAIN,
     CONF_API_KEY,
     CONF_BASE_URL,
-    CONF_BLINDS_FAVORITE_BUTTONS,
     CONF_CALENDAR_ENTITIES,
     CONF_CAMERA_ENTITIES,
     CONF_CUSTOM_LATITUDE,
@@ -147,6 +147,7 @@ class LMStudioConversationEntity(ConversationEntity):
 
     _attr_has_entity_name = True
     _attr_name = None
+    _attr_supported_languages = ["*"]  # Support all languages via LLM
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         """Initialize the agent."""
@@ -177,6 +178,22 @@ class LMStudioConversationEntity(ConversationEntity):
 
         # Initialize config
         self._update_from_config({**config_entry.data, **config_entry.options})
+
+    @property
+    def supported_languages(self) -> list[str]:
+        """Return supported languages (all via LLM)."""
+        return ["*"]
+
+    @property
+    def device_info(self):
+        """Return device info."""
+        return {
+            "identifiers": {(DOMAIN, self.entry.entry_id)},
+            "name": self.entry.title,
+            "manufacturer": "LosCV29",
+            "model": "PolyVoice",
+            "entry_type": "service",
+        }
 
     def _update_from_config(self, config: dict[str, Any]) -> None:
         """Update configuration."""
@@ -257,7 +274,6 @@ class LMStudioConversationEntity(ConversationEntity):
         self.thermostat_entity = config.get(CONF_THERMOSTAT_ENTITY, "")
         self.calendar_entities = parse_list_config(config.get(CONF_CALENDAR_ENTITIES, ""))
         self.camera_entities = parse_list_config(config.get(CONF_CAMERA_ENTITIES, ""))
-        self.blinds_favorite_buttons = parse_list_config(config.get(CONF_BLINDS_FAVORITE_BUTTONS, ""))
         self.llm_controlled_entities = set(parse_list_config(config.get(CONF_LLM_CONTROLLED_ENTITIES, DEFAULT_LLM_CONTROLLED_ENTITIES)))
         self.device_aliases = parse_entity_config(config.get(CONF_DEVICE_ALIASES, ""))
 
@@ -356,7 +372,7 @@ class LMStudioConversationEntity(ConversationEntity):
         user_text = user_input.text.strip()
         self._current_user_query = user_text
 
-        _LOGGER.info("Processing: '%s'", user_text)
+        _LOGGER.debug("Processing query: '%s'", user_text)
 
         # Check for simple queries that don't need LLM
         for pattern, query_type in SIMPLE_QUERY_PATTERNS:
@@ -874,8 +890,7 @@ class LMStudioConversationEntity(ConversationEntity):
 
             elif tool_name == "control_device":
                 return await device_tool.control_device(
-                    arguments, self.hass, self.device_aliases,
-                    self.blinds_favorite_buttons
+                    arguments, self.hass, self.device_aliases
                 )
 
             elif tool_name == "control_music":
