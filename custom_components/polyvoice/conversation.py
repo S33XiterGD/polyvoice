@@ -175,6 +175,31 @@ COVER_COMMAND_PATTERNS = frozenset([
     "roller", "blackout", "sheer",
 ])
 
+# Intent-to-pattern mapping for excluded intents
+# Since async_converse() EXECUTES before we can check exclusions, we must
+# skip native intents BEFORE calling it based on command patterns
+INTENT_PATTERNS = {
+    "HassTurnOn": ["turn on ", "switch on ", "enable ", "activate "],
+    "HassTurnOff": ["turn off ", "switch off ", "disable ", "deactivate "],
+    "HassLightSet": ["set light", "dim ", "brighten ", "set brightness", "change color", "set color"],
+    "HassOpenCover": ["open the ", "open my ", "raise the ", "raise my "],
+    "HassCloseCover": ["close the ", "close my ", "lower the ", "lower my "],
+    "HassSetPosition": ["set position", "move to ", "% open", "percent open"],
+    "HassClimateSetTemperature": ["set temperature", "set the temperature", "set thermostat", "change temperature"],
+    "HassClimateGetTemperature": ["what's the temperature", "what is the temperature", "how hot", "how cold", "current temperature"],
+    "HassGetState": ["what's the state", "what is the state", "is the ", "are the ", "status of"],
+    "HassMediaPause": ["pause ", "pause the "],
+    "HassMediaUnpause": ["resume ", "unpause ", "continue playing"],
+    "HassMediaNext": ["next ", "skip "],
+    "HassMediaPrevious": ["previous ", "go back"],
+    "HassVacuumStart": ["start vacuum", "start the vacuum", "vacuum the "],
+    "HassVacuumReturnToBase": ["return to base", "send vacuum home", "dock the vacuum"],
+    "HassTimerStart": ["set a timer", "start a timer", "timer for "],
+    "HassTimerCancel": ["cancel timer", "stop timer", "delete timer"],
+    "HassTimerStatus": ["timer status", "how much time", "time left"],
+    "HassNevermind": ["never mind", "nevermind", "cancel that", "forget it"],
+}
+
 # CAMERA_FRIENDLY_NAMES is now imported from const.py
 
 # =============================================================================
@@ -1112,15 +1137,23 @@ class LMStudioConversationEntity(ConversationEntity):
         self, user_input: conversation.ConversationInput, conversation_id: str
     ) -> conversation.ConversationResult | None:
         """Try to handle with native intent system using HA's built-in conversation agent."""
-        # Skip native intent for music commands - native handler executes BEFORE we can
-        # check if intent is excluded, causing double playback with Music Assistant
         text_lower = user_input.text.lower()
+
+        # CRITICAL: Check excluded intents BEFORE calling async_converse()
+        # async_converse() EXECUTES the intent, so checking after is too late!
+        # Build skip patterns from user's excluded intents list
+        for excluded_intent in self.excluded_intents:
+            patterns = INTENT_PATTERNS.get(excluded_intent, [])
+            if any(pattern in text_lower for pattern in patterns):
+                _LOGGER.debug("Skipping native intent (excluded: %s) for: %s", excluded_intent, user_input.text[:50])
+                return None
+
+        # Skip native intent for music commands - avoid double-play with Music Assistant
         if any(pattern in text_lower for pattern in MUSIC_COMMAND_PATTERNS):
             _LOGGER.debug("Skipping native intent for music command: %s", user_input.text[:50])
             return None
 
-        # Skip native intent for cover/blinds commands - HA native intents suck for these
-        # LLM handles fuzzy matching way better (e.g., "open master shade 3")
+        # Skip native intent for cover/blinds commands - LLM handles fuzzy matching better
         if any(pattern in text_lower for pattern in COVER_COMMAND_PATTERNS):
             _LOGGER.debug("Skipping native intent for cover command: %s", user_input.text[:50])
             return None
