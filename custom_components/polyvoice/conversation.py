@@ -4251,19 +4251,46 @@ class LMStudioConversationEntity(ConversationEntity):
                                 playlist_name = first_playlist.get("name") or first_playlist.get("title", "Unknown Playlist")
                                 playlist_uri = first_playlist.get("uri") or first_playlist.get("media_id")
 
-                        if not playlist_uri:
-                            # Fallback: try playing as playlist directly
-                            _LOGGER.info("No playlist found via search, trying direct play with query: %s", query)
-                            playlist_name = query
-                            playlist_uri = query
+                        # Default to playlist type
+                        media_type_to_use = "playlist"
 
-                        # Play the playlist with shuffle (explicitly disable radio mode)
+                        # If no playlist found, try artist instead
+                        if not playlist_uri:
+                            _LOGGER.info("No playlist found, searching for artist: %s", query)
+                            artist_result = await self.hass.services.async_call(
+                                "music_assistant", "search",
+                                {
+                                    "config_entry_id": ma_config_entry_id,
+                                    "name": query,
+                                    "media_type": ["artist"],
+                                    "limit": 1
+                                },
+                                blocking=True,
+                                return_response=True
+                            )
+                            if artist_result:
+                                artists = []
+                                if isinstance(artist_result, dict):
+                                    artists = artist_result.get("artists", [])
+                                elif isinstance(artist_result, list):
+                                    artists = artist_result
+                                if artists:
+                                    playlist_name = artists[0].get("name", query)
+                                    playlist_uri = artists[0].get("uri") or artists[0].get("media_id")
+                                    media_type_to_use = "artist"
+                                    _LOGGER.info("Found artist: %s, playing as artist (not radio)", playlist_name)
+
+                        # Fail if nothing found
+                        if not playlist_uri:
+                            return {"error": f"Could not find playlist or artist matching '{query}'"}
+
+                        # Play with shuffle (explicitly disable radio mode)
                         player = target_players[0]
                         await self.hass.services.async_call(
                             "music_assistant", "play_media",
                             {
                                 "media_id": playlist_uri,
-                                "media_type": "playlist",
+                                "media_type": media_type_to_use,
                                 "enqueue": "replace",
                                 "radio_mode": False
                             },
