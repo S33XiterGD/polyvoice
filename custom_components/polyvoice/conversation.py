@@ -11,7 +11,6 @@ from math import radians, cos, sin, asin, sqrt
 from typing import Any, Literal
 
 import aiohttp
-import voluptuous as vol
 from openai import AsyncOpenAI, AsyncAzureOpenAI, AuthenticationError as OpenAIAuthenticationError
 
 from homeassistant.components import conversation
@@ -19,7 +18,6 @@ from homeassistant.components.conversation import ConversationEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, MATCH_ALL
 from homeassistant.core import HomeAssistant
-from homeassistant.components.camera import async_get_image
 from homeassistant.helpers import intent, entity_registry as er, area_registry as ar, device_registry as dr
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
