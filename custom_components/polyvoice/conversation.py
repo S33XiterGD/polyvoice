@@ -1087,14 +1087,23 @@ class LMStudioConversationEntity(ConversationEntity):
         # Store original query for tools to access (for reliable device name extraction)
         self._current_user_query = user_input.text
 
-        _LOGGER.error("########## POLYVOICE RECEIVED: '%s' ##########", user_input.text)
-        _LOGGER.error("########## EXCLUDED INTENTS: %s ##########", self.excluded_intents)
+        # Check if command matches an excluded intent pattern - skip native if so
+        text_lower = user_input.text.lower()
+        skip_native = False
 
-        # Try native intents first, fall back to LLM if they fail
-        native_result = await self._try_native_intent(user_input, conversation_id)
-        _LOGGER.error("########## NATIVE RESULT: %s ##########", native_result)
-        if native_result is not None:
-            return native_result
+        # Build skip patterns dynamically from excluded intents
+        for excluded in self.excluded_intents:
+            patterns = INTENT_PATTERNS.get(excluded, [])
+            if any(p in text_lower for p in patterns):
+                _LOGGER.error("EXCLUDED INTENT MATCH: %s - skipping native", excluded)
+                skip_native = True
+                break
+
+        # Try native intents first (unless excluded), fall back to LLM
+        if not skip_native:
+            native_result = await self._try_native_intent(user_input, conversation_id)
+            if native_result is not None:
+                return native_result
 
         # Native intent didn't handle it - use LLM with tools (including control_device for fuzzy matching)
         tools = self._tools
@@ -1141,20 +1150,7 @@ class LMStudioConversationEntity(ConversationEntity):
         """Try to handle with native intent system using HA's built-in conversation agent."""
         text_lower = user_input.text.lower()
 
-        # CRITICAL: Check excluded intents BEFORE calling async_converse()
-        # async_converse() EXECUTES the intent, so checking after is too late!
-        # Build skip patterns from user's excluded intents list
-        _LOGGER.error("########## CHECKING EXCLUDED INTENTS ##########")
-        _LOGGER.error("Text: '%s'", text_lower)
-        _LOGGER.error("Excluded intents: %s", self.excluded_intents)
-        for excluded_intent in self.excluded_intents:
-            patterns = INTENT_PATTERNS.get(excluded_intent, [])
-            _LOGGER.error("Intent %s patterns: %s", excluded_intent, patterns)
-            for pattern in patterns:
-                _LOGGER.error("Checking if '%s' in '%s': %s", pattern, text_lower, pattern in text_lower)
-                if pattern in text_lower:
-                    _LOGGER.error("########## MATCH! '%s' found - SKIPPING NATIVE ##########", pattern)
-                    return None
+        # NOTE: Excluded intents are now checked in async_process BEFORE this is called
 
         # Skip native intent for music commands - avoid double-play with Music Assistant
         if any(pattern in text_lower for pattern in MUSIC_COMMAND_PATTERNS):
