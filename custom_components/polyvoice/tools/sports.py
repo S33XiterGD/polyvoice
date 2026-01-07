@@ -254,9 +254,30 @@ async def get_sports_info(
                             home_score = home_score_raw.get("displayValue", home_score_raw) if isinstance(home_score_raw, dict) else home_score_raw
                             away_score = away_score_raw.get("displayValue", away_score_raw) if isinstance(away_score_raw, dict) else away_score_raw
 
-                            game_date = last_game.get("date", "")[:10]
+                            # Format last game date with relative dates
+                            game_date_str = last_game.get("date", "")
+                            formatted_last_date = game_date_str[:10]  # Default fallback
+                            if game_date_str:
+                                try:
+                                    game_dt = datetime.fromisoformat(game_date_str.replace("Z", "+00:00"))
+                                    game_dt_local = game_dt.astimezone(hass_timezone)
+                                    now_local = datetime.now(hass_timezone)
+
+                                    game_date_only = game_dt_local.date()
+                                    today_date = now_local.date()
+                                    yesterday_date = today_date - timedelta(days=1)
+
+                                    if game_date_only == today_date:
+                                        formatted_last_date = "Today"
+                                    elif game_date_only == yesterday_date:
+                                        formatted_last_date = "Yesterday"
+                                    else:
+                                        formatted_last_date = game_dt_local.strftime("%A, %B %d")
+                                except (ValueError, KeyError, TypeError, AttributeError):
+                                    pass
+
                             result["last_game"] = {
-                                "date": game_date,
+                                "date": formatted_last_date,
                                 "home_team": home_name,
                                 "away_team": away_name,
                                 "home_score": home_score,
@@ -288,6 +309,7 @@ async def get_sports_info(
 async def get_ufc_info(
     arguments: dict[str, Any],
     session: "aiohttp.ClientSession",
+    hass_timezone,
     track_api_call: callable,
 ) -> dict[str, Any]:
     """Get UFC/MMA event information from ESPN API.
@@ -295,6 +317,7 @@ async def get_ufc_info(
     Args:
         arguments: Tool arguments (query_type)
         session: aiohttp session
+        hass_timezone: Home Assistant timezone
         track_api_call: Callback to track API usage
 
     Returns:
@@ -320,6 +343,10 @@ async def get_ufc_info(
             return {"error": "No upcoming UFC events found"}
 
         result = {"events": []}
+        now_local = datetime.now(hass_timezone)
+        today_date = now_local.date()
+        tomorrow_date = today_date + timedelta(days=1)
+        yesterday_date = today_date - timedelta(days=1)
 
         for event in calendar[:5]:
             event_info = {
@@ -328,8 +355,18 @@ async def get_ufc_info(
             }
             if event_info["date"] and event_info["date"] != "TBD":
                 try:
-                    event_dt = datetime.fromisoformat(event_info["date"])
-                    event_info["formatted_date"] = event_dt.strftime("%B %d, %Y")
+                    event_dt = datetime.fromisoformat(event.get("startDate", "").replace("Z", "+00:00"))
+                    event_dt_local = event_dt.astimezone(hass_timezone)
+                    event_date_only = event_dt_local.date()
+
+                    if event_date_only == today_date:
+                        event_info["formatted_date"] = "Today"
+                    elif event_date_only == tomorrow_date:
+                        event_info["formatted_date"] = "Tomorrow"
+                    elif event_date_only == yesterday_date:
+                        event_info["formatted_date"] = "Yesterday"
+                    else:
+                        event_info["formatted_date"] = event_dt_local.strftime("%A, %B %d")
                 except:
                     event_info["formatted_date"] = event_info["date"]
             result["events"].append(event_info)
