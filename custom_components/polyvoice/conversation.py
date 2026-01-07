@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import logging
 import re
@@ -16,7 +17,7 @@ from openai import AsyncOpenAI, AsyncAzureOpenAI, AuthenticationError as OpenAIA
 from homeassistant.components import conversation
 from homeassistant.components.conversation import ConversationEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_NAME, MATCH_ALL
+from homeassistant.const import CONF_NAME, MATCH_ALL, EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import intent, entity_registry as er, area_registry as ar, device_registry as dr
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -76,6 +77,7 @@ from .const import (
     CONF_DEVICE_ALIASES,
     CONF_CAMERA_ENTITIES,
     CONF_BLINDS_FAVORITE_BUTTONS,
+    CONF_LLM_CONTROLLED_ENTITIES,
     # Defaults
     DEFAULT_EXCLUDED_INTENTS,
     DEFAULT_SYSTEM_PROMPT,
@@ -92,6 +94,7 @@ from .const import (
     DEFAULT_ENABLE_WIKIPEDIA,
     DEFAULT_ENABLE_MUSIC,
     DEFAULT_ROOM_PLAYER_MAPPING,
+    DEFAULT_LLM_CONTROLLED_ENTITIES,
     CAMERA_FRIENDLY_NAMES,
     # Thermostat settings
     CONF_THERMOSTAT_MIN_TEMP,
@@ -155,7 +158,392 @@ MUSIC_COMMAND_PATTERNS = frozenset([
     "stop music", "stop the music",
 ])
 
+# Cover/blinds/shades command patterns - skip native intent for LLM handling
+# HA native intents execute BEFORE we can check exclusions, causing unwanted actions
+# LLM handles fuzzy matching way better (e.g., "open master shade 3")
+COVER_COMMAND_PATTERNS = frozenset([
+    # Open/close/stop
+    "open the blind", "open the shade", "open the curtain", "open the cover",
+    "close the blind", "close the shade", "close the curtain", "close the cover",
+    "open blind", "open shade", "open curtain", "open cover",
+    "close blind", "close shade", "close curtain", "close cover",
+    "raise the blind", "raise the shade", "lower the blind", "lower the shade",
+    "raise blind", "raise shade", "lower blind", "lower shade",
+    "stop the blind", "stop the shade", "stop blind", "stop shade",
+    # Position commands
+    "set blind", "set shade", "blind to", "shade to", "blinds to", "shades to",
+    # Favorite/preset
+    "favorite position", "preset position", "my position",
+    # Generic patterns that likely involve covers
+    "roller", "blackout", "sheer",
+])
+
+# =============================================================================
+# FUZZY MATCHING - The killer feature that makes PolyVoice superior to native HA
+# =============================================================================
+
+# Stopwords to remove from queries (articles, possessives, prepositions)
+STOPWORDS = frozenset(["the", "my", "a", "an", "in", "on", "at", "to", "for", "of", "please", "can", "you", "could", "would"])
+
+# Room abbreviations - expand these to full names
+ROOM_ABBREVIATIONS = {
+    "lr": "living room",
+    "br": "bedroom",
+    "mbr": "master bedroom",
+    "mb": "master bedroom",
+    "dr": "dining room",
+    "fr": "family room",
+    "kr": "kitchen",
+    "ba": "bathroom",
+    "bthrm": "bathroom",
+    "bth": "bathroom",
+    "gar": "garage",
+    "ofc": "office",
+    "lndry": "laundry",
+    "bsmt": "basement",
+    "atc": "attic",
+}
+
+# Synonym groups for fuzzy entity matching
+# When searching for entities, these synonyms are treated as equivalent
+COVER_SYNONYMS = frozenset(["blind", "blinds", "shade", "shades", "curtain", "curtains", "cover", "covers", "drape", "drapes", "roller", "rollers", "blackout", "blackouts", "sheer", "sheers"])
+
+# Extended synonyms for other device types - includes BOTH singular and plural
+DEVICE_SYNONYMS = {
+    # Cover synonyms (blind/shade/curtain/cover are interchangeable)
+    # Singular forms
+    "blind": ["shade", "curtain", "cover", "drape", "roller", "blinds", "shades"],
+    "shade": ["blind", "curtain", "cover", "drape", "roller", "blinds", "shades"],
+    "curtain": ["blind", "shade", "cover", "drape", "curtains", "blinds", "shades"],
+    "cover": ["blind", "shade", "curtain", "drape", "covers", "blinds", "shades"],
+    "drape": ["blind", "shade", "curtain", "cover", "drapes", "blinds", "shades"],
+    "roller": ["blind", "shade", "curtain", "cover", "rollers", "blinds", "shades"],
+    # Plural forms
+    "blinds": ["shades", "curtains", "covers", "drapes", "rollers", "blind", "shade"],
+    "shades": ["blinds", "curtains", "covers", "drapes", "rollers", "blind", "shade"],
+    "curtains": ["blinds", "shades", "covers", "drapes", "curtain", "blind", "shade"],
+    "covers": ["blinds", "shades", "curtains", "drapes", "cover", "blind", "shade"],
+    "drapes": ["blinds", "shades", "curtains", "covers", "drape", "blind", "shade"],
+    "rollers": ["blinds", "shades", "curtains", "covers", "roller", "blind", "shade"],
+    # Light synonyms
+    "light": ["lamp", "bulb", "fixture", "lights", "lamps"],
+    "lights": ["lamps", "bulbs", "fixtures", "light", "lamp"],
+    "lamp": ["light", "bulb", "lamps", "lights"],
+    "lamps": ["lights", "bulbs", "lamp", "light"],
+    "bulb": ["light", "lamp", "bulbs"],
+    "bulbs": ["lights", "lamps", "bulb"],
+    # Lock synonyms
+    "lock": ["deadbolt", "latch", "locks"],
+    "locks": ["deadbolts", "latches", "lock"],
+    # Climate synonyms
+    "thermostat": ["climate", "hvac", "ac", "heater", "temp", "temperature"],
+    "ac": ["air conditioner", "air conditioning", "climate", "thermostat", "cooling"],
+    "air conditioner": ["ac", "climate", "thermostat"],
+    "heater": ["heating", "thermostat", "climate", "heat"],
+    "heat": ["heater", "heating", "thermostat"],
+    # Fan synonyms
+    "fan": ["ceiling fan", "exhaust fan", "fans"],
+    "fans": ["ceiling fans", "fan"],
+    "ceiling fan": ["fan"],
+    # Door synonyms
+    "door": ["gate", "entry", "doors"],
+    "doors": ["gates", "door"],
+    "gate": ["door", "entry", "gates"],
+    "gates": ["doors", "gate"],
+    "garage": ["garage door"],
+    "garage door": ["garage"],
+    # TV/Media synonyms
+    "tv": ["television", "telly", "screen"],
+    "television": ["tv", "telly"],
+    "speaker": ["media player", "sonos", "echo", "speakers"],
+    "speakers": ["media players", "speaker"],
+    # Switch synonyms
+    "switch": ["outlet", "plug", "switches"],
+    "switches": ["outlets", "plugs", "switch"],
+    "outlet": ["switch", "plug", "outlets"],
+    "plug": ["outlet", "switch", "plugs"],
+}
+
+def _strip_stopwords(query: str) -> str:
+    """Remove stopwords from query for better matching."""
+    words = query.lower().split()
+    filtered = [w for w in words if w not in STOPWORDS]
+    return " ".join(filtered) if filtered else query.lower()
+
+def _expand_abbreviations(query: str) -> str:
+    """Expand room abbreviations like 'lr' -> 'living room'."""
+    words = query.lower().split()
+    expanded = []
+    for word in words:
+        if word in ROOM_ABBREVIATIONS:
+            expanded.append(ROOM_ABBREVIATIONS[word])
+        else:
+            expanded.append(word)
+    return " ".join(expanded)
+
+def normalize_cover_query(query: str) -> list[str]:
+    """Generate query variations for comprehensive fuzzy matching.
+
+    This is the KILLER FEATURE that makes PolyVoice superior to native HA intents.
+
+    For "the living room blinds" generates:
+    - "the living room blinds" (original)
+    - "living room blinds" (stopwords stripped)
+    - "living room shades" (synonym substitution)
+    - "living room shade" (singular form)
+    - "living room curtains", "living room covers", etc.
+
+    Works for all device types: blinds/shades, lights/lamps, locks, etc.
+    """
+    query_lower = query.lower().strip()
+    variations = set()  # Use set to avoid duplicates
+
+    # Start with original query
+    variations.add(query_lower)
+
+    # Strip stopwords version
+    stripped = _strip_stopwords(query_lower)
+    variations.add(stripped)
+
+    # Expand abbreviations
+    expanded = _expand_abbreviations(query_lower)
+    variations.add(expanded)
+    expanded_stripped = _strip_stopwords(expanded)
+    variations.add(expanded_stripped)
+
+    # Generate synonym variations for all base queries
+    base_queries = list(variations)
+    for base_query in base_queries:
+        words = base_query.split()
+        for i, word in enumerate(words):
+            if word in DEVICE_SYNONYMS:
+                # Generate variations with each synonym
+                for replacement in DEVICE_SYNONYMS[word]:
+                    new_words = words.copy()
+                    new_words[i] = replacement
+                    variation = " ".join(new_words)
+                    variations.add(variation)
+
+    # Return as list, with stripped versions first (more likely to match)
+    result = list(variations)
+    # Prioritize shorter queries (stopwords stripped) as they're more likely to match
+    result.sort(key=len)
+    return result
+
+# Intent-to-pattern mapping for excluded intents
+# Since async_converse() EXECUTES before we can check exclusions, we must
+# skip native intents BEFORE calling it based on command patterns
+INTENT_PATTERNS = {
+    "HassTurnOn": ["turn on ", "switch on ", "enable ", "activate "],
+    "HassTurnOff": ["turn off ", "switch off ", "disable ", "deactivate "],
+    "HassLightSet": ["set light", "dim ", "brighten ", "set brightness", "change color", "set color"],
+    "HassOpenCover": ["open the ", "open my ", "raise the ", "raise my "],
+    "HassCloseCover": ["close the ", "close my ", "lower the ", "lower my "],
+    "HassSetPosition": ["set position", "move to ", "% open", "percent open"],
+    "HassClimateSetTemperature": ["set temperature", "set the temperature", "set thermostat", "change temperature"],
+    "HassClimateGetTemperature": ["what's the temperature", "what is the temperature", "how hot", "how cold", "current temperature"],
+    "HassGetState": ["what's the state", "what is the state", "is the ", "are the ", "status of"],
+    "HassMediaPause": ["pause ", "pause the "],
+    "HassMediaUnpause": ["resume ", "unpause ", "continue playing"],
+    "HassMediaNext": ["next ", "skip "],
+    "HassMediaPrevious": ["previous ", "go back"],
+    "HassVacuumStart": ["start vacuum", "start the vacuum", "vacuum the "],
+    "HassVacuumReturnToBase": ["return to base", "send vacuum home", "dock the vacuum"],
+    "HassTimerStart": ["set a timer", "start a timer", "timer for "],
+    "HassTimerCancel": ["cancel timer", "stop timer", "delete timer"],
+    "HassTimerStatus": ["timer status", "how much time", "time left"],
+    "HassNevermind": ["never mind", "nevermind", "cancel that", "forget it"],
+}
+
 # CAMERA_FRIENDLY_NAMES is now imported from const.py
+
+# =============================================================================
+# EXCLUDED INTENT HANDLER - Intercepts built-in intents and routes to PolyVoice LLM
+# =============================================================================
+
+class PolyVoiceIntentHandler(intent.IntentHandler):
+    """Intent handler that redirects excluded intents to PolyVoice LLM.
+
+    When registered, this REPLACES the built-in HA intent handler for the given intent type.
+    This allows PolyVoice to intercept commands that would otherwise be handled by HA's
+    native intent system (which fires BEFORE the conversation agent is called).
+
+    If LLM-controlled entities are configured, only commands targeting those entities
+    are routed to the LLM - other commands fall through to the original handler.
+    """
+
+    def __init__(self, intent_type: str, polyvoice_agent: "LMStudioConversationEntity", original_handler: intent.IntentHandler | None = None) -> None:
+        """Initialize the handler."""
+        self.intent_type = intent_type
+        self._agent = polyvoice_agent
+        self._original_handler = original_handler
+        self.description = f"PolyVoice handler for {intent_type}"
+
+    def _extract_target_entities(self, intent_obj: intent.Intent) -> set[str]:
+        """Extract target entity IDs from the intent slots."""
+        entities = set()
+        slots = intent_obj.slots
+
+        # Check for direct entity references in slots
+        for slot_name in ["name", "entity", "entity_id", "targets"]:
+            slot = slots.get(slot_name, {})
+            if isinstance(slot, dict):
+                # Single entity
+                value = slot.get("value") or slot.get("text")
+                if value and "." in str(value):  # Looks like entity_id
+                    entities.add(str(value))
+            elif isinstance(slot, list):
+                # Multiple entities
+                for item in slot:
+                    if isinstance(item, dict):
+                        value = item.get("value") or item.get("text")
+                        if value and "." in str(value):
+                            entities.add(str(value))
+
+        # Also check intent_obj.targets if available (newer HA versions)
+        if hasattr(intent_obj, 'targets') and intent_obj.targets:
+            for target in intent_obj.targets:
+                if hasattr(target, 'entity_id') and target.entity_id:
+                    entities.add(target.entity_id)
+
+        return entities
+
+    def _should_use_llm(self, intent_obj: intent.Intent) -> bool:
+        """Determine if this intent should be handled by the LLM.
+
+        Returns True if:
+        - No LLM-controlled entities are configured (handle all excluded intents via LLM)
+        - OR any target entity is in the LLM-controlled entities list
+        """
+        llm_entities = self._agent.llm_controlled_entities
+
+        # If no LLM-controlled entities configured, handle ALL excluded intents via LLM
+        if not llm_entities:
+            return True
+
+        # Extract target entities from the intent
+        target_entities = self._extract_target_entities(intent_obj)
+
+        # If we couldn't extract entities, use LLM (safer)
+        if not target_entities:
+            _LOGGER.debug("Could not extract entities from intent, routing to LLM")
+            return True
+
+        # Check if any target entity is in the LLM-controlled list
+        matching = target_entities & llm_entities
+        if matching:
+            _LOGGER.debug("Target entity %s is LLM-controlled, routing to LLM", matching)
+            return True
+
+        _LOGGER.debug("Target entities %s not in LLM-controlled list %s, using native handler",
+                     target_entities, llm_entities)
+        return False
+
+    async def async_handle(self, intent_obj: intent.Intent) -> intent.IntentResponse:
+        """Handle the intent by routing to PolyVoice LLM or original handler."""
+        _LOGGER.info("PolyVoice intercepting excluded intent: %s", self.intent_type)
+
+        # Check if we should use LLM for this specific intent
+        if not self._should_use_llm(intent_obj):
+            # Not an LLM-controlled entity, use original handler
+            if self._original_handler:
+                _LOGGER.info("Delegating to original handler for non-LLM-controlled entity")
+                return await self._original_handler.async_handle(intent_obj)
+            else:
+                # No original handler - create a generic response
+                response = intent_obj.create_response()
+                response.async_set_speech("I'm not sure how to handle that.")
+                return response
+
+        # Get the original text from the intent
+        original_text = intent_obj.text_input or ""
+
+        if not original_text:
+            # Reconstruct from intent type and slots if text_input not available
+            original_text = self._reconstruct_command(intent_obj)
+
+        _LOGGER.debug("Routing to LLM with text: %s", original_text)
+
+        # Create a ConversationInput to pass to our LLM
+        user_input = conversation.ConversationInput(
+            text=original_text,
+            context=intent_obj.context,
+            conversation_id=None,
+            device_id=intent_obj.device_id,
+            language=intent_obj.language,
+            agent_id=None,
+            satellite_id=getattr(intent_obj, 'satellite_id', None),
+        )
+
+        # Call the LLM directly (skip native intent check since we ARE the handler)
+        tools = self._agent._tools
+        dynamic_max_tokens = self._agent._get_dynamic_max_tokens(original_text, tools)
+
+        try:
+            response_text = await self._agent._call_llm_streaming(
+                conversation_id="excluded_intent",
+                tools=tools,
+                user_input=user_input,
+                max_tokens=dynamic_max_tokens,
+            )
+
+            # Create successful response
+            response = intent_obj.create_response()
+            response.async_set_speech(response_text)
+            return response
+
+        except Exception as err:
+            _LOGGER.error("Error handling excluded intent via LLM: %s", err)
+            response = intent_obj.create_response()
+            response.async_set_speech(f"Sorry, I had trouble processing that: {err}")
+            return response
+
+    def _reconstruct_command(self, intent_obj: intent.Intent) -> str:
+        """Reconstruct a natural language command from intent slots."""
+        slots = intent_obj.slots
+
+        # Get entity name from slots
+        name_slot = slots.get("name", {})
+        entity_name = name_slot.get("text") or name_slot.get("value") or ""
+
+        # Get area from slots
+        area_slot = slots.get("area", {})
+        area_name = area_slot.get("text") or area_slot.get("value") or ""
+
+        # Build command based on intent type
+        intent_type = self.intent_type
+
+        if intent_type == "HassTurnOn":
+            return f"turn on {entity_name or area_name}".strip()
+        elif intent_type == "HassTurnOff":
+            return f"turn off {entity_name or area_name}".strip()
+        elif intent_type == "HassOpenCover":
+            return f"open {entity_name or area_name}".strip()
+        elif intent_type == "HassCloseCover":
+            return f"close {entity_name or area_name}".strip()
+        elif intent_type == "HassLightSet":
+            brightness = slots.get("brightness", {}).get("value", "")
+            color = slots.get("color", {}).get("value", "")
+            if brightness:
+                return f"set {entity_name or area_name} brightness to {brightness}".strip()
+            elif color:
+                return f"set {entity_name or area_name} to {color}".strip()
+            return f"adjust {entity_name or area_name}".strip()
+        elif intent_type == "HassSetPosition":
+            position = slots.get("position", {}).get("value", "")
+            return f"set {entity_name or area_name} to {position} percent".strip()
+        elif intent_type == "HassMediaPause":
+            return f"pause {entity_name or area_name or 'music'}".strip()
+        elif intent_type == "HassMediaUnpause":
+            return f"resume {entity_name or area_name or 'music'}".strip()
+        elif intent_type == "HassMediaNext":
+            return "next track"
+        elif intent_type == "HassMediaPrevious":
+            return "previous track"
+        else:
+            # Generic fallback
+            return f"{intent_type.replace('Hass', '').lower()} {entity_name or area_name}".strip()
+
 
 # =============================================================================
 # HELPER FUNCTIONS
@@ -225,7 +613,21 @@ def find_entity_by_name(hass: HomeAssistant, query: str, device_aliases: dict) -
     Search for entity using device aliases first, then fall back to HA entity registry aliases.
     Returns (entity_id, friendly_name) or (None, None) if not found.
     OPTIMIZED: Single-pass search with priority queue instead of 6 separate passes.
+    ENHANCED: Supports cover synonyms (blind/shade/curtain/cover are interchangeable)
     """
+    # Generate synonym variations for cover-related queries
+    query_variations = normalize_cover_query(query)
+
+    for query_var in query_variations:
+        result = _find_entity_by_query(hass, query_var, device_aliases)
+        if result[0] is not None:
+            return result
+
+    return (None, None)
+
+
+def _find_entity_by_query(hass: HomeAssistant, query: str, device_aliases: dict) -> tuple[str | None, str | None]:
+    """Internal entity search for a single query string."""
     query_lower = query.lower().strip()
 
     # PRIORITY 1: Exact match in configured device aliases (O(1) dict lookup)
@@ -262,12 +664,12 @@ def find_entity_by_name(hass: HomeAssistant, query: str, device_aliases: dict) -
                 if query_lower in alias_lower or alias_lower in query_lower:
                     partial_matches.append((4, entity_entry.entity_id, friendly_name or alias))
 
-        # Check friendly name
+        # Check friendly name (bidirectional partial matching for fuzzy support)
         if friendly_name:
             fn_lower = friendly_name.lower()
             if fn_lower == query_lower:
                 partial_matches.append((5, entity_entry.entity_id, friendly_name))  # PRIORITY 5: Exact friendly
-            elif query_lower in fn_lower:
+            elif query_lower in fn_lower or fn_lower in query_lower:
                 partial_matches.append((6, entity_entry.entity_id, friendly_name))  # PRIORITY 6: Partial friendly
 
     # Check states not in entity registry (rare but possible)
@@ -278,13 +680,32 @@ def find_entity_by_name(hass: HomeAssistant, query: str, device_aliases: dict) -
                 fn_lower = friendly_name.lower()
                 if fn_lower == query_lower:
                     partial_matches.append((5, entity_id, friendly_name))
-                elif query_lower in fn_lower:
+                elif query_lower in fn_lower or fn_lower in query_lower:
                     partial_matches.append((6, entity_id, friendly_name))
 
     # Return best match by priority
     if partial_matches:
         partial_matches.sort(key=lambda x: x[0])
         return (partial_matches[0][1], partial_matches[0][2])
+
+    # PRIORITY 7: Generic fuzzy matching using difflib (catches typos and close matches)
+    # Only if no other matches found - this is the last resort
+    all_friendly_names = []
+    name_to_entity = {}
+    for entity_id, state in all_states.items():
+        friendly_name = state.attributes.get("friendly_name", "")
+        if friendly_name:
+            fn_lower = friendly_name.lower()
+            all_friendly_names.append(fn_lower)
+            name_to_entity[fn_lower] = (entity_id, friendly_name)
+
+    # Find close matches with 60% similarity threshold
+    close_matches = difflib.get_close_matches(query_lower, all_friendly_names, n=1, cutoff=0.6)
+    if close_matches:
+        matched_name = close_matches[0]
+        entity_id, friendly_name = name_to_entity[matched_name]
+        _LOGGER.debug("Fuzzy matched '%s' to '%s' (entity: %s)", query_lower, friendly_name, entity_id)
+        return (entity_id, friendly_name)
 
     return (None, None)
 
@@ -334,6 +755,9 @@ class LMStudioConversationEntity(ConversationEntity):
         self._last_music_command_time: datetime | None = None
         self._music_debounce_seconds = 5  # Ignore same command within 5 seconds
         self._last_paused_player: str | None = None  # Track which player we paused for smart resume
+
+        # Track original intent handlers so we can restore them on unload
+        self._original_intent_handlers: dict[str, intent.IntentHandler | None] = {}
 
         # Initialize config
         self._update_from_config({**config_entry.data, **config_entry.options})
@@ -439,6 +863,10 @@ class LMStudioConversationEntity(ConversationEntity):
         # Blinds/shades configuration - favorite buttons for preset positions
         self.blinds_favorite_buttons = parse_list_config(config.get(CONF_BLINDS_FAVORITE_BUTTONS, ""))
         _LOGGER.debug("Blinds favorite buttons: %s", self.blinds_favorite_buttons)
+
+        # LLM-controlled entities - devices that should always be handled by LLM instead of native intents
+        self.llm_controlled_entities = set(parse_list_config(config.get(CONF_LLM_CONTROLLED_ENTITIES, DEFAULT_LLM_CONTROLLED_ENTITIES)))
+        _LOGGER.debug("LLM-controlled entities: %s", self.llm_controlled_entities)
 
         self.device_aliases = parse_entity_config(config.get(CONF_DEVICE_ALIASES, ""))
 
@@ -612,17 +1040,119 @@ class LMStudioConversationEntity(ConversationEntity):
         self.entry.async_on_unload(
             self.entry.add_update_listener(self._async_entry_updated)
         )
-        
+
         # Get shared aiohttp session (HUGE perf boost - reuses TCP connections!)
         self._session = async_get_clientsession(self.hass)
-        
+
         # Register usage tracking sensors
         self._update_usage_sensors()
 
+        # Register custom intent handlers AFTER HA is fully started
+        # This ensures we register LAST so our handlers aren't overwritten by other components
+        async def _delayed_handler_registration(_event=None) -> None:
+            """Register handlers after HA is fully started."""
+            _LOGGER.info("HA started - registering PolyVoice intent handlers (delayed)")
+            await self._register_excluded_intent_handlers()
+
+        if self.hass.is_running:
+            # HA already started, register now
+            await _delayed_handler_registration()
+        else:
+            # Wait for HA to fully start so we register AFTER all other components
+            self.hass.bus.async_listen_once(
+                EVENT_HOMEASSISTANT_STARTED,
+                _delayed_handler_registration
+            )
+
+        # Add cleanup callback to restore original handlers on unload
+        self.entry.async_on_unload(self._restore_original_intent_handlers)
+
+    async def _register_excluded_intent_handlers(self) -> None:
+        """Register custom handlers for excluded intents.
+
+        This is the KEY to making excluded intents work:
+        - HA's voice pipeline with prefer_local_intents=True calls async_handle_intents
+          on the DEFAULT agent BEFORE calling the conversation agent's async_process
+        - If a built-in intent matches, it fires immediately and async_process is NEVER called
+        - By registering our own handlers that OVERWRITE the built-in ones, we intercept
+          these intents and route them to our LLM instead
+        """
+        if not self.excluded_intents:
+            _LOGGER.debug("No excluded intents configured, skipping handler registration")
+            return
+
+        # Get the current intent handlers registry
+        intents_registry = self.hass.data.get(intent.DATA_KEY, {})
+
+        _LOGGER.info(
+            "Registering PolyVoice handlers for excluded intents: %s",
+            self.excluded_intents
+        )
+
+        for intent_type in self.excluded_intents:
+            # Store the original handler so we can restore it on unload
+            original_handler = intents_registry.get(intent_type)
+            self._original_intent_handlers[intent_type] = original_handler
+
+            # Register our custom handler that routes to LLM
+            # Pass the original handler so we can delegate for non-LLM-controlled entities
+            handler = PolyVoiceIntentHandler(intent_type, self, original_handler)
+            intent.async_register(self.hass, handler)
+
+            _LOGGER.info(
+                "Registered PolyVoice handler for %s (replaced: %s, llm_entities: %s)",
+                intent_type,
+                original_handler.__class__.__name__ if original_handler else "None",
+                len(self.llm_controlled_entities) if self.llm_controlled_entities else "all"
+            )
+
+    def _restore_original_intent_handlers(self) -> None:
+        """Restore original intent handlers on unload.
+
+        This ensures that when PolyVoice is removed/reloaded, the built-in
+        intent handlers are restored to their original behavior.
+        """
+        if not self._original_intent_handlers:
+            return
+
+        _LOGGER.info("Restoring original intent handlers...")
+
+        intents_registry = self.hass.data.get(intent.DATA_KEY, {})
+        if not intents_registry:
+            return
+
+        for intent_type, original_handler in self._original_intent_handlers.items():
+            if original_handler is not None:
+                # Restore the original handler
+                intent.async_register(self.hass, original_handler)
+                _LOGGER.debug("Restored original handler for %s", intent_type)
+            else:
+                # No original handler - remove our handler
+                intents_registry.pop(intent_type, None)
+                _LOGGER.debug("Removed PolyVoice handler for %s (no original)", intent_type)
+
+        self._original_intent_handlers.clear()
+
     async def _async_entry_updated(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Handle config entry update."""
+        # Store old values to detect changes
+        old_excluded_intents = self.excluded_intents.copy() if self.excluded_intents else set()
+        old_llm_entities = self.llm_controlled_entities.copy() if self.llm_controlled_entities else set()
+
         self._update_from_config({**entry.data, **entry.options})
         self.async_write_ha_state()
+
+        # If excluded intents or LLM-controlled entities changed, update the handlers
+        if old_excluded_intents != self.excluded_intents or old_llm_entities != self.llm_controlled_entities:
+            _LOGGER.info(
+                "Intent config changed - re-registering handlers (intents: %s->%s, llm_entities: %s->%s)",
+                old_excluded_intents, self.excluded_intents,
+                old_llm_entities, self.llm_controlled_entities
+            )
+            # Restore original handlers first
+            self._restore_original_intent_handlers()
+            # Register new handlers
+            await self._register_excluded_intent_handlers()
 
     def _update_usage_sensors(self) -> None:
         """Update usage tracking sensors in Home Assistant."""
@@ -1036,15 +1566,21 @@ class LMStudioConversationEntity(ConversationEntity):
     async def async_process(
         self, user_input: conversation.ConversationInput
     ) -> conversation.ConversationResult:
-        """Process a sentence."""
+        """Process a sentence.
+
+        NOTE: For excluded intents, our PolyVoiceIntentHandler intercepts them at the
+        pipeline level (in async_handle_intents) BEFORE this method is called.
+        This method is only reached for commands that:
+        1. Didn't match any local intent (strict matching failed)
+        2. Matched a local intent that's NOT in excluded_intents
+        """
         conversation_id = user_input.conversation_id or ulid.ulid_now()
 
         # Store original query for tools to access (for reliable device name extraction)
         self._current_user_query = user_input.text
 
-        _LOGGER.info("=== Incoming request: '%s' (conv_id: %s) ===", user_input.text, conversation_id[:8])
-
-        # Try native intents first, fall back to LLM if they fail
+        # Try native intents first, fall back to LLM
+        # NOTE: Music/cover command patterns are checked inside _try_native_intent
         native_result = await self._try_native_intent(user_input, conversation_id)
         if native_result is not None:
             return native_result
@@ -1091,12 +1627,24 @@ class LMStudioConversationEntity(ConversationEntity):
     async def _try_native_intent(
         self, user_input: conversation.ConversationInput, conversation_id: str
     ) -> conversation.ConversationResult | None:
-        """Try to handle with native intent system using HA's built-in conversation agent."""
-        # Skip native intent for music commands - native handler executes BEFORE we can
-        # check if intent is excluded, causing double playback with Music Assistant
+        """Try to handle with native intent system using HA's built-in conversation agent.
+
+        This is a FALLBACK for commands that didn't match during pipeline's strict intent
+        matching. We try the HA conversation agent here which may use less strict matching.
+
+        NOTE: Excluded intents are intercepted at the pipeline level by our
+        PolyVoiceIntentHandler, so they never reach this method.
+        """
         text_lower = user_input.text.lower()
+
+        # Skip native intent for music commands - avoid double-play with Music Assistant
         if any(pattern in text_lower for pattern in MUSIC_COMMAND_PATTERNS):
             _LOGGER.debug("Skipping native intent for music command: %s", user_input.text[:50])
+            return None
+
+        # Skip native intent for cover/blinds commands - LLM handles fuzzy matching better
+        if any(pattern in text_lower for pattern in COVER_COMMAND_PATTERNS):
+            _LOGGER.debug("Skipping native intent for cover command: %s", user_input.text[:50])
             return None
 
         try:
@@ -1109,18 +1657,8 @@ class LMStudioConversationEntity(ConversationEntity):
                 language=user_input.language,
                 agent_id="conversation.home_assistant",  # Full entity ID
             )
-            
+
             _LOGGER.debug("Native converse response_type: %s", result.response.response_type)
-
-            # Check if we got an intent result
-            if hasattr(result.response, 'intent') and result.response.intent is not None:
-                intent_type = result.response.intent.intent_type
-                _LOGGER.debug("Native intent matched: %s", intent_type)
-
-                # Check if this intent is in our excluded list
-                if intent_type in self.excluded_intents:
-                    _LOGGER.debug("Intent excluded, sending to LLM: %s", intent_type)
-                    return None
 
             # ACTION_DONE = command executed (turn on light, etc)
             if result.response.response_type == intent.IntentResponseType.ACTION_DONE:

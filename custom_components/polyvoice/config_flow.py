@@ -72,6 +72,7 @@ from .const import (
     CONF_DEVICE_ALIASES,
     CONF_CAMERA_ENTITIES,
     CONF_BLINDS_FAVORITE_BUTTONS,
+    CONF_LLM_CONTROLLED_ENTITIES,
     # Thermostat settings
     CONF_THERMOSTAT_MIN_TEMP,
     CONF_THERMOSTAT_MAX_TEMP,
@@ -104,6 +105,7 @@ from .const import (
     DEFAULT_DEVICE_ALIASES,
     DEFAULT_CAMERA_ENTITIES,
     DEFAULT_BLINDS_FAVORITE_BUTTONS,
+    DEFAULT_LLM_CONTROLLED_ENTITIES,
     # Thermostat defaults
     DEFAULT_THERMOSTAT_MIN_TEMP,
     DEFAULT_THERMOSTAT_MAX_TEMP,
@@ -434,6 +436,7 @@ class LMStudioOptionsFlowHandler(config_entries.OptionsFlow):
                 "entities": "PolyVoice Default Entities",
                 "aliases": "LLM Fallback Aliases",
                 "music_rooms": "Music Room Mapping",
+                "llm_devices": "LLM-Controlled Devices",
                 "api_keys": "API Keys",
                 "location": "Location Settings",
                 "intents": "Excluded Intents",
@@ -822,52 +825,83 @@ class LMStudioOptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_aliases(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle device aliases configuration."""
+        """Handle device aliases configuration with edit/delete support."""
         current = {**self._entry.data, **self._entry.options}
         current_aliases = current.get(CONF_DEVICE_ALIASES, "")
 
+        # Parse current aliases into dict {alias_name: entity_id}
+        aliases_dict = {}
+        if current_aliases:
+            for line in current_aliases.split("\n"):
+                line = line.strip()
+                if ": " in line:
+                    alias_name, entity_id = line.split(": ", 1)
+                    aliases_dict[alias_name.strip()] = entity_id.strip()
+
         if user_input is not None:
+            selected = user_input.get("select_alias", "")
             new_entity = user_input.get("alias_entity", "")
             new_alias = user_input.get("alias_name", "").strip()
-            clear_all = user_input.get("clear_aliases", False)
+            action = user_input.get("action", "add")
 
-            if clear_all:
-                # Clear all aliases
-                new_options = {**self._entry.options, CONF_DEVICE_ALIASES: ""}
-                return self.async_create_entry(title="", data=new_options)
-
-            if new_entity and new_alias:
-                # Add new alias to existing
-                if current_aliases:
-                    updated_aliases = f"{current_aliases}\n{new_alias}: {new_entity}"
-                else:
-                    updated_aliases = f"{new_alias}: {new_entity}"
-
-                new_options = {**self._entry.options, CONF_DEVICE_ALIASES: updated_aliases}
-                # Save and show form again to add more
-                self.hass.config_entries.async_update_entry(
-                    self._entry, options=new_options
-                )
-                # Refresh current aliases for display
-                current_aliases = updated_aliases
-
-            if not new_entity and not new_alias:
-                # User submitted empty form - return to menu
+            if action == "delete" and selected:
+                # Delete selected alias
+                if selected in aliases_dict:
+                    del aliases_dict[selected]
+            elif action == "update" and selected and new_entity:
+                # Update selected alias (delete old, add new)
+                if selected in aliases_dict:
+                    del aliases_dict[selected]
+                alias_key = new_alias if new_alias else selected
+                aliases_dict[alias_key] = new_entity
+            elif action == "add" and new_entity and new_alias:
+                # Add new alias
+                aliases_dict[new_alias] = new_entity
+            elif not selected and not new_entity and not new_alias:
+                # Empty submit - return to menu
                 return self.async_create_entry(title="", data=self._entry.options)
 
+            # Save updated aliases
+            if aliases_dict:
+                updated_aliases = "\n".join([f"{k}: {v}" for k, v in aliases_dict.items()])
+            else:
+                updated_aliases = ""
+
+            new_options = {**self._entry.options, CONF_DEVICE_ALIASES: updated_aliases}
+            self.hass.config_entries.async_update_entry(self._entry, options=new_options)
+            current_aliases = updated_aliases
+            # Rebuild dict for display
+            aliases_dict = {}
+            if current_aliases:
+                for line in current_aliases.split("\n"):
+                    line = line.strip()
+                    if ": " in line:
+                        alias_name, entity_id = line.split(": ", 1)
+                        aliases_dict[alias_name.strip()] = entity_id.strip()
+
         # Build description showing current aliases
-        if current_aliases:
-            alias_lines = [line.strip() for line in current_aliases.split("\n") if line.strip()]
-            alias_display = "\n".join([f"• {line}" for line in alias_lines])
-            description = f"**Current aliases:**\n{alias_display}\n\nAdd another alias below, or submit empty to finish."
+        if aliases_dict:
+            alias_display = "\n".join([f"• {k} → {v}" for k, v in aliases_dict.items()])
+            description = f"**Current aliases:**\n{alias_display}\n\nSelect one to edit/delete, or add a new one below."
         else:
             description = "No aliases configured. Add your first alias below."
+
+        # Build select options for existing aliases (no "none" option - just leave empty to add new)
+        select_options = []
+        for alias_name in aliases_dict.keys():
+            select_options.append(selector.SelectOptionDict(value=alias_name, label=f"{alias_name} → {aliases_dict[alias_name]}"))
 
         return self.async_show_form(
             step_id="aliases",
             description_placeholders={"aliases": description},
             data_schema=vol.Schema(
                 {
+                    vol.Optional("select_alias"): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=select_options,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
                     vol.Optional("alias_entity"): selector.EntitySelector(
                         selector.EntitySelectorConfig(
                             multiple=False,
@@ -878,7 +912,16 @@ class LMStudioOptionsFlowHandler(config_entries.OptionsFlow):
                             type=selector.TextSelectorType.TEXT,
                         )
                     ),
-                    vol.Optional("clear_aliases", default=False): cv.boolean,
+                    vol.Optional("action", default="add"): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                selector.SelectOptionDict(value="add", label="Add New"),
+                                selector.SelectOptionDict(value="update", label="Update Selected"),
+                                selector.SelectOptionDict(value="delete", label="Delete Selected"),
+                            ],
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
                 }
             ),
         )
@@ -886,52 +929,83 @@ class LMStudioOptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_music_rooms(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle music room to player mapping configuration."""
+        """Handle music room to player mapping configuration with edit/delete support."""
         current = {**self._entry.data, **self._entry.options}
         current_mapping = current.get(CONF_ROOM_PLAYER_MAPPING, "")
 
+        # Parse current mappings into dict {room_name: entity_id}
+        rooms_dict = {}
+        if current_mapping:
+            for line in current_mapping.split("\n"):
+                line = line.strip()
+                if ": " in line:
+                    room_name, entity_id = line.split(": ", 1)
+                    rooms_dict[room_name.strip().lower()] = entity_id.strip()
+
         if user_input is not None:
+            selected = user_input.get("select_room", "")
             new_player = user_input.get("room_player", "")
             new_room = user_input.get("room_name", "").strip().lower()
-            clear_all = user_input.get("clear_rooms", False)
+            action = user_input.get("action", "add")
 
-            if clear_all:
-                # Clear all mappings
-                new_options = {**self._entry.options, CONF_ROOM_PLAYER_MAPPING: ""}
-                return self.async_create_entry(title="", data=new_options)
-
-            if new_player and new_room:
-                # Add new mapping to existing
-                if current_mapping:
-                    updated_mapping = f"{current_mapping}\n{new_room}: {new_player}"
-                else:
-                    updated_mapping = f"{new_room}: {new_player}"
-
-                new_options = {**self._entry.options, CONF_ROOM_PLAYER_MAPPING: updated_mapping}
-                # Save and show form again to add more
-                self.hass.config_entries.async_update_entry(
-                    self._entry, options=new_options
-                )
-                # Refresh current mapping for display
-                current_mapping = updated_mapping
-
-            if not new_player and not new_room:
-                # User submitted empty form - return to menu
+            if action == "delete" and selected:
+                # Delete selected room
+                if selected in rooms_dict:
+                    del rooms_dict[selected]
+            elif action == "update" and selected and new_player:
+                # Update selected room (delete old, add new)
+                if selected in rooms_dict:
+                    del rooms_dict[selected]
+                room_key = new_room if new_room else selected
+                rooms_dict[room_key] = new_player
+            elif action == "add" and new_player and new_room:
+                # Add new room mapping
+                rooms_dict[new_room] = new_player
+            elif not selected and not new_player and not new_room:
+                # Empty submit - return to menu
                 return self.async_create_entry(title="", data=self._entry.options)
 
+            # Save updated mappings
+            if rooms_dict:
+                updated_mapping = "\n".join([f"{k}: {v}" for k, v in rooms_dict.items()])
+            else:
+                updated_mapping = ""
+
+            new_options = {**self._entry.options, CONF_ROOM_PLAYER_MAPPING: updated_mapping}
+            self.hass.config_entries.async_update_entry(self._entry, options=new_options)
+            current_mapping = updated_mapping
+            # Rebuild dict for display
+            rooms_dict = {}
+            if current_mapping:
+                for line in current_mapping.split("\n"):
+                    line = line.strip()
+                    if ": " in line:
+                        room_name, entity_id = line.split(": ", 1)
+                        rooms_dict[room_name.strip().lower()] = entity_id.strip()
+
         # Build description showing current mappings
-        if current_mapping:
-            mapping_lines = [line.strip() for line in current_mapping.split("\n") if line.strip()]
-            mapping_display = "\n".join([f"• {line}" for line in mapping_lines])
-            description = f"**Current room mappings:**\n{mapping_display}\n\nAdd another room below, or submit empty to finish."
+        if rooms_dict:
+            mapping_display = "\n".join([f"• {k} → {v}" for k, v in rooms_dict.items()])
+            description = f"**Current room mappings:**\n{mapping_display}\n\nSelect one to edit/delete, or add a new one below."
         else:
             description = "No room mappings configured. Add your first room below."
+
+        # Build select options for existing rooms (no "none" option - just leave empty to add new)
+        select_options = []
+        for room_name in rooms_dict.keys():
+            select_options.append(selector.SelectOptionDict(value=room_name, label=f"{room_name} → {rooms_dict[room_name]}"))
 
         return self.async_show_form(
             step_id="music_rooms",
             description_placeholders={"mappings": description},
             data_schema=vol.Schema(
                 {
+                    vol.Optional("select_room"): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=select_options,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
                     vol.Optional("room_player"): selector.EntitySelector(
                         selector.EntitySelectorConfig(
                             domain="media_player",
@@ -943,9 +1017,65 @@ class LMStudioOptionsFlowHandler(config_entries.OptionsFlow):
                             type=selector.TextSelectorType.TEXT,
                         )
                     ),
-                    vol.Optional("clear_rooms", default=False): cv.boolean,
+                    vol.Optional("action", default="add"): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                selector.SelectOptionDict(value="add", label="Add New"),
+                                selector.SelectOptionDict(value="update", label="Update Selected"),
+                                selector.SelectOptionDict(value="delete", label="Delete Selected"),
+                            ],
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
                 }
             ),
+        )
+
+    async def async_step_llm_devices(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle LLM-controlled devices configuration.
+
+        Devices in this list will always be handled by the LLM instead of native intents.
+        This allows fuzzy matching and smarter control for specific devices like blinds.
+        """
+        if user_input is not None:
+            # Convert entity list to newline-separated string
+            llm_entities = user_input.get(CONF_LLM_CONTROLLED_ENTITIES, [])
+            if isinstance(llm_entities, list):
+                processed_value = "\n".join(llm_entities)
+            else:
+                processed_value = llm_entities
+
+            new_options = {**self._entry.options, CONF_LLM_CONTROLLED_ENTITIES: processed_value}
+            return self.async_create_entry(title="", data=new_options)
+
+        current = {**self._entry.data, **self._entry.options}
+
+        # Parse current LLM-controlled entities back to list
+        current_entities = current.get(CONF_LLM_CONTROLLED_ENTITIES, DEFAULT_LLM_CONTROLLED_ENTITIES)
+        if isinstance(current_entities, str) and current_entities:
+            current_entities = [e.strip() for e in current_entities.split("\n") if e.strip()]
+        elif not current_entities:
+            current_entities = []
+
+        return self.async_show_form(
+            step_id="llm_devices",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_LLM_CONTROLLED_ENTITIES,
+                        default=current_entities,
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            multiple=True,
+                        )
+                    ),
+                }
+            ),
+            description_placeholders={
+                "description": "Select devices that should always be controlled by the LLM instead of native Home Assistant intents. This enables fuzzy name matching (e.g., 'blinds' matches 'shade') and smarter control logic.",
+            },
         )
 
     async def async_step_api_keys(
