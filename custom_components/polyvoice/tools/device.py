@@ -296,6 +296,7 @@ async def control_device(
     arguments: dict[str, Any],
     hass: "HomeAssistant",
     device_aliases: dict[str, str],
+    llm_controlled_entities: set[str] = None,
 ) -> dict[str, Any]:
     """Control smart home devices.
 
@@ -314,6 +315,7 @@ async def control_device(
         arguments: Tool arguments
         hass: Home Assistant instance
         device_aliases: Custom device name -> entity_id mapping
+        llm_controlled_entities: Set of entity_ids configured for LLM control
 
     Returns:
         Control result dict
@@ -469,9 +471,31 @@ async def control_device(
         if not entities_to_control:
             return {"error": f"No controllable devices found in area '{area_name}'."}
 
-    # Method 4: Fuzzy device name matching
+    # Method 4: Device name matching
     elif device_name:
-        found_entity_id, friendly_name = find_entity_by_name(hass, device_name, device_aliases)
+        found_entity_id = None
+        friendly_name = None
+        device_name_lower = device_name.lower()
+
+        # Step 1: Check LLM controlled entities first (simple matching)
+        if llm_controlled_entities:
+            for entity_id in llm_controlled_entities:
+                state = hass.states.get(entity_id)
+                if state:
+                    entity_friendly = state.attributes.get("friendly_name", "").lower()
+                    # Exact match or contained match
+                    if (device_name_lower == entity_friendly or
+                        device_name_lower in entity_friendly or
+                        entity_friendly in device_name_lower):
+                        found_entity_id = entity_id
+                        friendly_name = state.attributes.get("friendly_name", entity_id)
+                        _LOGGER.info("LLM control match: '%s' -> %s (%s)", device_name, friendly_name, entity_id)
+                        break
+
+        # Step 2: Fall back to fuzzy matching if not found in LLM controlled
+        if not found_entity_id:
+            found_entity_id, friendly_name = find_entity_by_name(hass, device_name, device_aliases)
+
         if found_entity_id:
             entities_to_control.append((found_entity_id, friendly_name))
         else:
