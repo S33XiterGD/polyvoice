@@ -2,6 +2,10 @@
 
 This module intercepts native Home Assistant intents and routes them
 through PolyVoice for LLM-controlled processing.
+
+Interception happens when:
+1. The intent type is in the user's excluded_intents list, OR
+2. The target entity is in the user's llm_controlled_entities (Smart Devices)
 """
 from __future__ import annotations
 
@@ -18,8 +22,8 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# Intents that should be handled by PolyVoice instead of native HA
-INTERCEPTED_INTENTS = frozenset([
+# Intents that CAN be intercepted by PolyVoice
+INTERCEPTABLE_INTENTS = frozenset([
     "HassTurnOn",
     "HassTurnOff",
     "HassToggle",
@@ -28,14 +32,6 @@ INTERCEPTED_INTENTS = frozenset([
     "HassCloseCover",
     "HassSetPosition",
 ])
-
-# Patterns to extract device names from intent slot structures
-SLOT_PATTERNS = [
-    # Nested value structure: {"value": {"text": "device name"}}
-    r'"text"\s*:\s*"([^"]+)"',
-    # Simple value structure: {"value": "device name"}
-    r'"value"\s*:\s*"([^"]+)"',
-]
 
 
 class PolyVoiceIntentHandler(IntentHandler):
@@ -46,6 +42,8 @@ class PolyVoiceIntentHandler(IntentHandler):
         intent_type: str,
         hass: "HomeAssistant",
         conversation_entity_id: str,
+        excluded_intents: set[str],
+        llm_controlled_entities: set[str],
         original_handler: IntentHandler | None = None,
     ):
         """Initialize the intent handler.
@@ -54,11 +52,15 @@ class PolyVoiceIntentHandler(IntentHandler):
             intent_type: The intent type to handle (e.g., "HassTurnOn")
             hass: Home Assistant instance
             conversation_entity_id: Entity ID of the PolyVoice conversation entity
+            excluded_intents: Intent types to always intercept
+            llm_controlled_entities: Entity IDs to always route to LLM
             original_handler: The original handler to fall back to if needed
         """
         self._intent_type = intent_type
         self._hass = hass
         self._conversation_entity_id = conversation_entity_id
+        self._excluded_intents = excluded_intents
+        self._llm_controlled_entities = llm_controlled_entities
         self._original_handler = original_handler
 
     @property
@@ -66,8 +68,49 @@ class PolyVoiceIntentHandler(IntentHandler):
         """Return the intent type this handler handles."""
         return self._intent_type
 
+    def _get_target_entity_id(self, intent: "Intent") -> str | None:
+        """Extract the target entity ID from intent slots or matched states."""
+        # First check matched_states - HA populates this when entity is resolved
+        if hasattr(intent, 'slots') and intent.slots:
+            name_slot = intent.slots.get("name", {})
+            if isinstance(name_slot, dict):
+                value = name_slot.get("value")
+                if isinstance(value, str):
+                    # Try to find entity by name
+                    for state in self._hass.states.async_all():
+                        friendly = state.attributes.get("friendly_name", "").lower()
+                        if friendly and value.lower() in friendly:
+                            return state.entity_id
+                        if value.lower() in state.entity_id.lower():
+                            return state.entity_id
+        return None
+
+    def _should_intercept(self, intent: "Intent") -> bool:
+        """Determine if this intent should be intercepted.
+
+        Returns True if:
+        1. The intent type is in excluded_intents, OR
+        2. The target entity is in llm_controlled_entities
+        """
+        # Always intercept if intent type is excluded
+        if self._intent_type in self._excluded_intents:
+            _LOGGER.debug("Intercepting %s - intent type is excluded", self._intent_type)
+            return True
+
+        # Check if target entity is in LLM-controlled list
+        if self._llm_controlled_entities:
+            target_entity = self._get_target_entity_id(intent)
+            if target_entity and target_entity in self._llm_controlled_entities:
+                _LOGGER.info(
+                    "Intercepting %s for entity %s - entity is in Smart Devices list",
+                    self._intent_type, target_entity
+                )
+                return True
+
+        return False
+
     async def async_handle(self, intent: "Intent") -> IntentResponse:
-        """Handle the intent by routing to PolyVoice.
+        """Handle the intent by routing to PolyVoice if appropriate.
 
         Args:
             intent: The intent to handle
@@ -75,6 +118,13 @@ class PolyVoiceIntentHandler(IntentHandler):
         Returns:
             IntentResponse with the result
         """
+        # Check if we should intercept this intent
+        if not self._should_intercept(intent):
+            _LOGGER.debug("Not intercepting %s - using native handler", self._intent_type)
+            if self._original_handler:
+                return await self._original_handler.async_handle(intent)
+            raise HomeAssistantError(f"No handler for {self._intent_type}")
+
         _LOGGER.info(
             "PolyVoice intercepted %s intent - routing to LLM for intelligent handling",
             self._intent_type
@@ -186,13 +236,20 @@ def register_intent_handlers(
     hass: "HomeAssistant",
     conversation_entity_id: str,
     excluded_intents: set[str],
+    llm_controlled_entities: set[str],
 ) -> dict[str, IntentHandler]:
-    """Register PolyVoice handlers for excluded intents.
+    """Register PolyVoice handlers for interceptable intents.
+
+    Handlers are registered for ALL interceptable intents, but only actually
+    intercept when:
+    1. The intent type is in excluded_intents, OR
+    2. The target entity is in llm_controlled_entities
 
     Args:
         hass: Home Assistant instance
         conversation_entity_id: Entity ID of the PolyVoice conversation entity
-        excluded_intents: Set of intent types to intercept
+        excluded_intents: Set of intent types to always intercept
+        llm_controlled_entities: Set of entity IDs to always route to LLM
 
     Returns:
         Dict of intent_type -> original_handler for later restoration
@@ -201,19 +258,31 @@ def register_intent_handlers(
 
     original_handlers: dict[str, IntentHandler] = {}
 
-    for intent_type in excluded_intents:
-        if intent_type not in INTERCEPTED_INTENTS:
+    # Register handlers for ALL interceptable intents if we have entity-based control
+    # This allows per-entity interception even for intents not in excluded_intents
+    intents_to_register = INTERCEPTABLE_INTENTS if llm_controlled_entities else excluded_intents
+
+    for intent_type in intents_to_register:
+        if intent_type not in INTERCEPTABLE_INTENTS:
             continue
+
+        # Get original handler if it exists
+        original = intent_helpers.async_get(hass).get(intent_type)
 
         # Register our handler (it will override any existing one)
         handler = PolyVoiceIntentHandler(
             intent_type=intent_type,
             hass=hass,
             conversation_entity_id=conversation_entity_id,
-            original_handler=None,
+            excluded_intents=excluded_intents,
+            llm_controlled_entities=llm_controlled_entities,
+            original_handler=original,
         )
         intent_helpers.async_register(hass, handler)
         _LOGGER.info("Registered PolyVoice handler for %s intent", intent_type)
+
+        if original:
+            original_handlers[intent_type] = original
 
     return original_handlers
 
