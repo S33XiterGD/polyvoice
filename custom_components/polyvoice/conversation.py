@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import logging
 import re
@@ -174,6 +175,75 @@ COVER_COMMAND_PATTERNS = frozenset([
     # Generic patterns that likely involve covers
     "roller", "blackout", "sheer",
 ])
+
+# Synonym groups for fuzzy entity matching
+# When searching for entities, these synonyms are treated as equivalent
+COVER_SYNONYMS = frozenset(["blind", "blinds", "shade", "shades", "curtain", "curtains", "cover", "covers", "drape", "drapes", "roller", "rollers", "blackout", "blackouts", "sheer", "sheers"])
+
+# Extended synonyms for other device types
+DEVICE_SYNONYMS = {
+    # Cover synonyms (blind/shade/curtain/cover are interchangeable)
+    "blind": ["shade", "curtain", "cover", "drape", "roller"],
+    "blinds": ["shades", "curtains", "covers", "drapes", "rollers"],
+    "shade": ["blind", "curtain", "cover", "drape", "roller"],
+    "shades": ["blinds", "curtains", "covers", "drapes", "rollers"],
+    "curtain": ["blind", "shade", "cover", "drape"],
+    "curtains": ["blinds", "shades", "covers", "drapes"],
+    # Light synonyms
+    "light": ["lamp", "bulb", "fixture"],
+    "lights": ["lamps", "bulbs", "fixtures"],
+    "lamp": ["light", "bulb"],
+    "lamps": ["lights", "bulbs"],
+    # Lock synonyms
+    "lock": ["deadbolt", "latch"],
+    "locks": ["deadbolts", "latches"],
+    # Climate synonyms
+    "thermostat": ["climate", "hvac", "ac", "heater"],
+    "ac": ["air conditioner", "air conditioning", "climate", "thermostat"],
+    "air conditioner": ["ac", "climate", "thermostat"],
+    "heater": ["heating", "thermostat", "climate"],
+    # Fan synonyms
+    "fan": ["ceiling fan", "exhaust fan"],
+    "ceiling fan": ["fan"],
+    # Door synonyms
+    "door": ["gate", "entry"],
+    "gate": ["door", "entry"],
+    "garage": ["garage door"],
+    "garage door": ["garage"],
+    # TV/Media synonyms
+    "tv": ["television", "telly"],
+    "television": ["tv", "telly"],
+    "speaker": ["media player", "sonos", "echo"],
+}
+
+def normalize_cover_query(query: str) -> list[str]:
+    """Generate query variations by substituting device synonyms.
+
+    For example, "living room blinds" generates:
+    - "living room blinds"
+    - "living room shades"
+    - "living room curtains"
+    - "living room covers"
+    etc.
+
+    Works for all device types: blinds/shades, lights/lamps, locks, etc.
+    """
+    query_lower = query.lower()
+    variations = [query_lower]
+
+    # Check if any synonym word is in the query
+    words = query_lower.split()
+    for i, word in enumerate(words):
+        if word in DEVICE_SYNONYMS:
+            # Generate variations with other synonyms
+            for replacement in DEVICE_SYNONYMS[word]:
+                new_words = words.copy()
+                new_words[i] = replacement
+                variation = " ".join(new_words)
+                if variation not in variations:
+                    variations.append(variation)
+
+    return variations
 
 # Intent-to-pattern mapping for excluded intents
 # Since async_converse() EXECUTES before we can check exclusions, we must
@@ -382,7 +452,21 @@ def find_entity_by_name(hass: HomeAssistant, query: str, device_aliases: dict) -
     Search for entity using device aliases first, then fall back to HA entity registry aliases.
     Returns (entity_id, friendly_name) or (None, None) if not found.
     OPTIMIZED: Single-pass search with priority queue instead of 6 separate passes.
+    ENHANCED: Supports cover synonyms (blind/shade/curtain/cover are interchangeable)
     """
+    # Generate synonym variations for cover-related queries
+    query_variations = normalize_cover_query(query)
+
+    for query_var in query_variations:
+        result = _find_entity_by_query(hass, query_var, device_aliases)
+        if result[0] is not None:
+            return result
+
+    return (None, None)
+
+
+def _find_entity_by_query(hass: HomeAssistant, query: str, device_aliases: dict) -> tuple[str | None, str | None]:
+    """Internal entity search for a single query string."""
     query_lower = query.lower().strip()
 
     # PRIORITY 1: Exact match in configured device aliases (O(1) dict lookup)
@@ -442,6 +526,25 @@ def find_entity_by_name(hass: HomeAssistant, query: str, device_aliases: dict) -
     if partial_matches:
         partial_matches.sort(key=lambda x: x[0])
         return (partial_matches[0][1], partial_matches[0][2])
+
+    # PRIORITY 7: Generic fuzzy matching using difflib (catches typos and close matches)
+    # Only if no other matches found - this is the last resort
+    all_friendly_names = []
+    name_to_entity = {}
+    for entity_id, state in all_states.items():
+        friendly_name = state.attributes.get("friendly_name", "")
+        if friendly_name:
+            fn_lower = friendly_name.lower()
+            all_friendly_names.append(fn_lower)
+            name_to_entity[fn_lower] = (entity_id, friendly_name)
+
+    # Find close matches with 60% similarity threshold
+    close_matches = difflib.get_close_matches(query_lower, all_friendly_names, n=1, cutoff=0.6)
+    if close_matches:
+        matched_name = close_matches[0]
+        entity_id, friendly_name = name_to_entity[matched_name]
+        _LOGGER.debug("Fuzzy matched '%s' to '%s' (entity: %s)", query_lower, friendly_name, entity_id)
+        return (entity_id, friendly_name)
 
     return (None, None)
 
