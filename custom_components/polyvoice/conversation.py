@@ -341,6 +341,7 @@ class LMStudioConversationEntity(ConversationEntity):
         self._last_music_command: str | None = None
         self._last_music_command_time: datetime | None = None
         self._music_debounce_seconds = 5  # Ignore same command within 5 seconds
+        self._last_paused_player: str | None = None  # Track which player we paused for smart resume
 
         # Initialize config
         self._update_from_config({**config_entry.data, **config_entry.options})
@@ -4067,7 +4068,7 @@ class LMStudioConversationEntity(ConversationEntity):
                     for player in target_players:
                         await self.hass.services.async_call(
                             "music_assistant", "play_media",
-                            {"media_id": query, "media_type": media_type, "enqueue": "replace"},
+                            {"media_id": query, "media_type": media_type, "enqueue": "replace", "radio_mode": False},
                             target={"entity_id": player},
                             blocking=True
                         )
@@ -4093,16 +4094,29 @@ class LMStudioConversationEntity(ConversationEntity):
                     playing = find_player_by_state("playing")
                     if playing:
                         await self.hass.services.async_call("media_player", "media_pause", {"entity_id": playing})
+                        self._last_paused_player = playing  # Remember for smart resume
+                        _LOGGER.info("Stored %s as last paused player", playing)
                         return {"status": "paused", "message": f"Paused in {get_room_name(playing)}"}
                     return {"error": "No music is currently playing"}
 
                 elif action == "resume":
-                    # Find the player that's currently PAUSED and resume it
-                    _LOGGER.info("Looking for player in 'paused' state...")
+                    # Smart resume: first try the player we paused, then fall back to state check
+                    _LOGGER.info("Looking for player to resume...")
+
+                    # First: try the player we previously paused
+                    if self._last_paused_player and self._last_paused_player in all_players:
+                        _LOGGER.info("Resuming last paused player: %s", self._last_paused_player)
+                        await self.hass.services.async_call("media_player", "media_play", {"entity_id": self._last_paused_player})
+                        room_name = get_room_name(self._last_paused_player)
+                        self._last_paused_player = None  # Clear after resume
+                        return {"status": "resumed", "message": f"Resumed in {room_name}"}
+
+                    # Fallback: check for player in "paused" state
                     paused = find_player_by_state("paused")
                     if paused:
                         await self.hass.services.async_call("media_player", "media_play", {"entity_id": paused})
                         return {"status": "resumed", "message": f"Resumed in {get_room_name(paused)}"}
+
                     return {"error": "No paused music to resume"}
 
                 elif action == "stop":
@@ -4237,20 +4251,48 @@ class LMStudioConversationEntity(ConversationEntity):
                                 playlist_name = first_playlist.get("name") or first_playlist.get("title", "Unknown Playlist")
                                 playlist_uri = first_playlist.get("uri") or first_playlist.get("media_id")
 
-                        if not playlist_uri:
-                            # Fallback: try playing as playlist directly
-                            _LOGGER.info("No playlist found via search, trying direct play with query: %s", query)
-                            playlist_name = query
-                            playlist_uri = query
+                        # Default to playlist type
+                        media_type_to_use = "playlist"
 
-                        # Play the playlist with shuffle
+                        # If no playlist found, try artist instead
+                        if not playlist_uri:
+                            _LOGGER.info("No playlist found, searching for artist: %s", query)
+                            artist_result = await self.hass.services.async_call(
+                                "music_assistant", "search",
+                                {
+                                    "config_entry_id": ma_config_entry_id,
+                                    "name": query,
+                                    "media_type": ["artist"],
+                                    "limit": 1
+                                },
+                                blocking=True,
+                                return_response=True
+                            )
+                            if artist_result:
+                                artists = []
+                                if isinstance(artist_result, dict):
+                                    artists = artist_result.get("artists", [])
+                                elif isinstance(artist_result, list):
+                                    artists = artist_result
+                                if artists:
+                                    playlist_name = artists[0].get("name", query)
+                                    playlist_uri = artists[0].get("uri") or artists[0].get("media_id")
+                                    media_type_to_use = "artist"
+                                    _LOGGER.info("Found artist: %s, playing as artist (not radio)", playlist_name)
+
+                        # Fail if nothing found
+                        if not playlist_uri:
+                            return {"error": f"Could not find playlist or artist matching '{query}'"}
+
+                        # Play with shuffle (explicitly disable radio mode)
                         player = target_players[0]
                         await self.hass.services.async_call(
                             "music_assistant", "play_media",
                             {
                                 "media_id": playlist_uri,
-                                "media_type": "playlist",
-                                "enqueue": "replace"
+                                "media_type": media_type_to_use,
+                                "enqueue": "replace",
+                                "radio_mode": False
                             },
                             target={"entity_id": player},
                             blocking=True
