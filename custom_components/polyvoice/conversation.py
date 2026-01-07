@@ -179,6 +179,11 @@ class LMStudioConversationEntity(ConversationEntity):
         # Initialize config
         self._update_from_config({**config_entry.data, **config_entry.options})
 
+    @property
+    def supported_languages(self) -> list[str]:
+        """Return supported languages (all via LLM)."""
+        return ["*"]
+
     def _update_from_config(self, config: dict[str, Any]) -> None:
         """Update configuration."""
         # Provider settings
