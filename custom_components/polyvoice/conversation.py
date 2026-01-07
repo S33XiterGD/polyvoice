@@ -178,74 +178,157 @@ COVER_COMMAND_PATTERNS = frozenset([
     "roller", "blackout", "sheer",
 ])
 
+# =============================================================================
+# FUZZY MATCHING - The killer feature that makes PolyVoice superior to native HA
+# =============================================================================
+
+# Stopwords to remove from queries (articles, possessives, prepositions)
+STOPWORDS = frozenset(["the", "my", "a", "an", "in", "on", "at", "to", "for", "of", "please", "can", "you", "could", "would"])
+
+# Room abbreviations - expand these to full names
+ROOM_ABBREVIATIONS = {
+    "lr": "living room",
+    "br": "bedroom",
+    "mbr": "master bedroom",
+    "mb": "master bedroom",
+    "dr": "dining room",
+    "fr": "family room",
+    "kr": "kitchen",
+    "ba": "bathroom",
+    "bthrm": "bathroom",
+    "bth": "bathroom",
+    "gar": "garage",
+    "ofc": "office",
+    "lndry": "laundry",
+    "bsmt": "basement",
+    "atc": "attic",
+}
+
 # Synonym groups for fuzzy entity matching
 # When searching for entities, these synonyms are treated as equivalent
 COVER_SYNONYMS = frozenset(["blind", "blinds", "shade", "shades", "curtain", "curtains", "cover", "covers", "drape", "drapes", "roller", "rollers", "blackout", "blackouts", "sheer", "sheers"])
 
-# Extended synonyms for other device types
+# Extended synonyms for other device types - includes BOTH singular and plural
 DEVICE_SYNONYMS = {
     # Cover synonyms (blind/shade/curtain/cover are interchangeable)
-    "blind": ["shade", "curtain", "cover", "drape", "roller"],
-    "blinds": ["shades", "curtains", "covers", "drapes", "rollers"],
-    "shade": ["blind", "curtain", "cover", "drape", "roller"],
-    "shades": ["blinds", "curtains", "covers", "drapes", "rollers"],
-    "curtain": ["blind", "shade", "cover", "drape"],
-    "curtains": ["blinds", "shades", "covers", "drapes"],
+    # Singular forms
+    "blind": ["shade", "curtain", "cover", "drape", "roller", "blinds", "shades"],
+    "shade": ["blind", "curtain", "cover", "drape", "roller", "blinds", "shades"],
+    "curtain": ["blind", "shade", "cover", "drape", "curtains", "blinds", "shades"],
+    "cover": ["blind", "shade", "curtain", "drape", "covers", "blinds", "shades"],
+    "drape": ["blind", "shade", "curtain", "cover", "drapes", "blinds", "shades"],
+    "roller": ["blind", "shade", "curtain", "cover", "rollers", "blinds", "shades"],
+    # Plural forms
+    "blinds": ["shades", "curtains", "covers", "drapes", "rollers", "blind", "shade"],
+    "shades": ["blinds", "curtains", "covers", "drapes", "rollers", "blind", "shade"],
+    "curtains": ["blinds", "shades", "covers", "drapes", "curtain", "blind", "shade"],
+    "covers": ["blinds", "shades", "curtains", "drapes", "cover", "blind", "shade"],
+    "drapes": ["blinds", "shades", "curtains", "covers", "drape", "blind", "shade"],
+    "rollers": ["blinds", "shades", "curtains", "covers", "roller", "blind", "shade"],
     # Light synonyms
-    "light": ["lamp", "bulb", "fixture"],
-    "lights": ["lamps", "bulbs", "fixtures"],
-    "lamp": ["light", "bulb"],
-    "lamps": ["lights", "bulbs"],
+    "light": ["lamp", "bulb", "fixture", "lights", "lamps"],
+    "lights": ["lamps", "bulbs", "fixtures", "light", "lamp"],
+    "lamp": ["light", "bulb", "lamps", "lights"],
+    "lamps": ["lights", "bulbs", "lamp", "light"],
+    "bulb": ["light", "lamp", "bulbs"],
+    "bulbs": ["lights", "lamps", "bulb"],
     # Lock synonyms
-    "lock": ["deadbolt", "latch"],
-    "locks": ["deadbolts", "latches"],
+    "lock": ["deadbolt", "latch", "locks"],
+    "locks": ["deadbolts", "latches", "lock"],
     # Climate synonyms
-    "thermostat": ["climate", "hvac", "ac", "heater"],
-    "ac": ["air conditioner", "air conditioning", "climate", "thermostat"],
+    "thermostat": ["climate", "hvac", "ac", "heater", "temp", "temperature"],
+    "ac": ["air conditioner", "air conditioning", "climate", "thermostat", "cooling"],
     "air conditioner": ["ac", "climate", "thermostat"],
-    "heater": ["heating", "thermostat", "climate"],
+    "heater": ["heating", "thermostat", "climate", "heat"],
+    "heat": ["heater", "heating", "thermostat"],
     # Fan synonyms
-    "fan": ["ceiling fan", "exhaust fan"],
+    "fan": ["ceiling fan", "exhaust fan", "fans"],
+    "fans": ["ceiling fans", "fan"],
     "ceiling fan": ["fan"],
     # Door synonyms
-    "door": ["gate", "entry"],
-    "gate": ["door", "entry"],
+    "door": ["gate", "entry", "doors"],
+    "doors": ["gates", "door"],
+    "gate": ["door", "entry", "gates"],
+    "gates": ["doors", "gate"],
     "garage": ["garage door"],
     "garage door": ["garage"],
     # TV/Media synonyms
-    "tv": ["television", "telly"],
+    "tv": ["television", "telly", "screen"],
     "television": ["tv", "telly"],
-    "speaker": ["media player", "sonos", "echo"],
+    "speaker": ["media player", "sonos", "echo", "speakers"],
+    "speakers": ["media players", "speaker"],
+    # Switch synonyms
+    "switch": ["outlet", "plug", "switches"],
+    "switches": ["outlets", "plugs", "switch"],
+    "outlet": ["switch", "plug", "outlets"],
+    "plug": ["outlet", "switch", "plugs"],
 }
 
-def normalize_cover_query(query: str) -> list[str]:
-    """Generate query variations by substituting device synonyms.
+def _strip_stopwords(query: str) -> str:
+    """Remove stopwords from query for better matching."""
+    words = query.lower().split()
+    filtered = [w for w in words if w not in STOPWORDS]
+    return " ".join(filtered) if filtered else query.lower()
 
-    For example, "living room blinds" generates:
-    - "living room blinds"
-    - "living room shades"
-    - "living room curtains"
-    - "living room covers"
-    etc.
+def _expand_abbreviations(query: str) -> str:
+    """Expand room abbreviations like 'lr' -> 'living room'."""
+    words = query.lower().split()
+    expanded = []
+    for word in words:
+        if word in ROOM_ABBREVIATIONS:
+            expanded.append(ROOM_ABBREVIATIONS[word])
+        else:
+            expanded.append(word)
+    return " ".join(expanded)
+
+def normalize_cover_query(query: str) -> list[str]:
+    """Generate query variations for comprehensive fuzzy matching.
+
+    This is the KILLER FEATURE that makes PolyVoice superior to native HA intents.
+
+    For "the living room blinds" generates:
+    - "the living room blinds" (original)
+    - "living room blinds" (stopwords stripped)
+    - "living room shades" (synonym substitution)
+    - "living room shade" (singular form)
+    - "living room curtains", "living room covers", etc.
 
     Works for all device types: blinds/shades, lights/lamps, locks, etc.
     """
-    query_lower = query.lower()
-    variations = [query_lower]
+    query_lower = query.lower().strip()
+    variations = set()  # Use set to avoid duplicates
 
-    # Check if any synonym word is in the query
-    words = query_lower.split()
-    for i, word in enumerate(words):
-        if word in DEVICE_SYNONYMS:
-            # Generate variations with other synonyms
-            for replacement in DEVICE_SYNONYMS[word]:
-                new_words = words.copy()
-                new_words[i] = replacement
-                variation = " ".join(new_words)
-                if variation not in variations:
-                    variations.append(variation)
+    # Start with original query
+    variations.add(query_lower)
 
-    return variations
+    # Strip stopwords version
+    stripped = _strip_stopwords(query_lower)
+    variations.add(stripped)
+
+    # Expand abbreviations
+    expanded = _expand_abbreviations(query_lower)
+    variations.add(expanded)
+    expanded_stripped = _strip_stopwords(expanded)
+    variations.add(expanded_stripped)
+
+    # Generate synonym variations for all base queries
+    base_queries = list(variations)
+    for base_query in base_queries:
+        words = base_query.split()
+        for i, word in enumerate(words):
+            if word in DEVICE_SYNONYMS:
+                # Generate variations with each synonym
+                for replacement in DEVICE_SYNONYMS[word]:
+                    new_words = words.copy()
+                    new_words[i] = replacement
+                    variation = " ".join(new_words)
+                    variations.add(variation)
+
+    # Return as list, with stripped versions first (more likely to match)
+    result = list(variations)
+    # Prioritize shorter queries (stopwords stripped) as they're more likely to match
+    result.sort(key=len)
+    return result
 
 # Intent-to-pattern mapping for excluded intents
 # Since async_converse() EXECUTES before we can check exclusions, we must
