@@ -211,25 +211,9 @@ class LMStudioConversationEntity(ConversationEntity):
             base_url = PROVIDER_BASE_URLS.get(self.provider, "http://localhost:1234/v1")
         self.base_url = base_url
 
-        # Create client for OpenAI-compatible providers
-        if self.provider == PROVIDER_AZURE:
-            azure_endpoint = self.base_url
-            if "/openai/deployments/" in azure_endpoint:
-                azure_endpoint = azure_endpoint.split("/openai/deployments/")[0]
-            self.client = AsyncAzureOpenAI(
-                azure_endpoint=azure_endpoint,
-                api_key=self.api_key,
-                api_version="2024-02-01",
-            )
-        elif self.provider in OPENAI_COMPATIBLE_PROVIDERS:
-            self.client = AsyncOpenAI(
-                base_url=self.base_url,
-                api_key=self.api_key if self.api_key else "ollama",
-                timeout=60.0,
-                max_retries=2,
-            )
-        else:
-            self.client = None
+        # Mark client for deferred initialization (avoid blocking SSL on event loop)
+        self.client = None
+        self._client_init_needed = True
 
         # Conversation features
         self._attr_supported_features = conversation.ConversationEntityFeature.CONTROL
@@ -305,9 +289,34 @@ class LMStudioConversationEntity(ConversationEntity):
             return "unknown"
         return f"{int(temp)}{self.temp_unit}"
 
+    def _create_openai_client(self):
+        """Create OpenAI client (runs in executor to avoid blocking SSL)."""
+        if self.provider == PROVIDER_AZURE:
+            azure_endpoint = self.base_url
+            if "/openai/deployments/" in azure_endpoint:
+                azure_endpoint = azure_endpoint.split("/openai/deployments/")[0]
+            return AsyncAzureOpenAI(
+                azure_endpoint=azure_endpoint,
+                api_key=self.api_key,
+                api_version="2024-02-01",
+            )
+        elif self.provider in OPENAI_COMPATIBLE_PROVIDERS:
+            return AsyncOpenAI(
+                base_url=self.base_url,
+                api_key=self.api_key if self.api_key else "ollama",
+                timeout=60.0,
+                max_retries=2,
+            )
+        return None
+
     async def async_added_to_hass(self) -> None:
         """When entity is added to hass."""
         await super().async_added_to_hass()
+
+        # Initialize OpenAI client in executor (SSL cert loading is blocking)
+        if self._client_init_needed:
+            self.client = await self.hass.async_add_executor_job(self._create_openai_client)
+            self._client_init_needed = False
 
         # Initialize shared session
         self._session = async_get_clientsession(self.hass)
