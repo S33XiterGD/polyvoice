@@ -71,9 +71,7 @@ from .const import (
     CONF_ROOM_PLAYER_MAPPING,
     CONF_DEVICE_ALIASES,
     CONF_CAMERA_ENTITIES,
-    CONF_BLINDS_ENTITIES,
     CONF_BLINDS_FAVORITE_BUTTONS,
-    CONF_ENABLE_BLINDS,
     # Thermostat settings
     CONF_THERMOSTAT_MIN_TEMP,
     CONF_THERMOSTAT_MAX_TEMP,
@@ -105,9 +103,7 @@ from .const import (
     DEFAULT_ROOM_PLAYER_MAPPING,
     DEFAULT_DEVICE_ALIASES,
     DEFAULT_CAMERA_ENTITIES,
-    DEFAULT_BLINDS_ENTITIES,
     DEFAULT_BLINDS_FAVORITE_BUTTONS,
-    DEFAULT_ENABLE_BLINDS,
     # Thermostat defaults
     DEFAULT_THERMOSTAT_MIN_TEMP,
     DEFAULT_THERMOSTAT_MAX_TEMP,
@@ -438,7 +434,6 @@ class LMStudioOptionsFlowHandler(config_entries.OptionsFlow):
                 "entities": "PolyVoice Default Entities",
                 "aliases": "LLM Fallback Aliases",
                 "music_rooms": "Music Room Mapping",
-                "blinds": "Blinds/Shades Control",
                 "api_keys": "API Keys",
                 "location": "Location Settings",
                 "intents": "Excluded Intents",
@@ -654,6 +649,14 @@ class LMStudioOptionsFlowHandler(config_entries.OptionsFlow):
                 else:
                     processed_input[CONF_CAMERA_ENTITIES] = cam_list
 
+            # Handle blinds favorite buttons - convert list to newline-separated string
+            if CONF_BLINDS_FAVORITE_BUTTONS in user_input:
+                buttons_list = user_input[CONF_BLINDS_FAVORITE_BUTTONS]
+                if isinstance(buttons_list, list):
+                    processed_input[CONF_BLINDS_FAVORITE_BUTTONS] = "\n".join(buttons_list)
+                else:
+                    processed_input[CONF_BLINDS_FAVORITE_BUTTONS] = buttons_list
+
             # Handle thermostat settings
             if CONF_THERMOSTAT_MIN_TEMP in user_input:
                 processed_input[CONF_THERMOSTAT_MIN_TEMP] = user_input[CONF_THERMOSTAT_MIN_TEMP]
@@ -682,6 +685,13 @@ class LMStudioOptionsFlowHandler(config_entries.OptionsFlow):
             current_cameras = [c.strip() for c in current_cameras.split("\n") if c.strip()]
         elif not current_cameras:
             current_cameras = []
+
+        # Parse current blinds favorite buttons back to list
+        current_buttons = current.get(CONF_BLINDS_FAVORITE_BUTTONS, DEFAULT_BLINDS_FAVORITE_BUTTONS)
+        if isinstance(current_buttons, str) and current_buttons:
+            current_buttons = [b.strip() for b in current_buttons.split("\n") if b.strip()]
+        elif not current_buttons:
+            current_buttons = []
 
         # Determine if using Celsius and set appropriate defaults/ranges
         use_celsius = current.get(CONF_THERMOSTAT_USE_CELSIUS, DEFAULT_THERMOSTAT_USE_CELSIUS)
@@ -757,6 +767,15 @@ class LMStudioOptionsFlowHandler(config_entries.OptionsFlow):
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(
                             domain="camera",
+                            multiple=True,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_BLINDS_FAVORITE_BUTTONS,
+                        default=current_buttons,
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="button",
                             multiple=True,
                         )
                     ),
@@ -925,83 +944,6 @@ class LMStudioOptionsFlowHandler(config_entries.OptionsFlow):
                         )
                     ),
                     vol.Optional("clear_rooms", default=False): cv.boolean,
-                }
-            ),
-        )
-
-    async def async_step_blinds(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Handle blinds/shades configuration."""
-        if user_input is not None:
-            # Convert entity lists to newline-separated strings
-            processed_input = {}
-
-            # Handle enable toggle
-            if CONF_ENABLE_BLINDS in user_input:
-                processed_input[CONF_ENABLE_BLINDS] = user_input[CONF_ENABLE_BLINDS]
-
-            # Handle blinds entities - convert list to newline-separated string
-            if CONF_BLINDS_ENTITIES in user_input:
-                blinds_list = user_input[CONF_BLINDS_ENTITIES]
-                if isinstance(blinds_list, list):
-                    processed_input[CONF_BLINDS_ENTITIES] = "\n".join(blinds_list)
-                else:
-                    processed_input[CONF_BLINDS_ENTITIES] = blinds_list
-
-            # Handle favorite buttons - convert list to newline-separated string
-            if CONF_BLINDS_FAVORITE_BUTTONS in user_input:
-                buttons_list = user_input[CONF_BLINDS_FAVORITE_BUTTONS]
-                if isinstance(buttons_list, list):
-                    processed_input[CONF_BLINDS_FAVORITE_BUTTONS] = "\n".join(buttons_list)
-                else:
-                    processed_input[CONF_BLINDS_FAVORITE_BUTTONS] = buttons_list
-
-            new_options = {**self._entry.options, **processed_input}
-            return self.async_create_entry(title="", data=new_options)
-
-        current = {**self._entry.data, **self._entry.options}
-
-        # Parse current blinds entities back to list
-        current_blinds = current.get(CONF_BLINDS_ENTITIES, DEFAULT_BLINDS_ENTITIES)
-        if isinstance(current_blinds, str) and current_blinds:
-            current_blinds = [b.strip() for b in current_blinds.split("\n") if b.strip()]
-        elif not current_blinds:
-            current_blinds = []
-
-        # Parse current favorite buttons back to list
-        current_buttons = current.get(CONF_BLINDS_FAVORITE_BUTTONS, DEFAULT_BLINDS_FAVORITE_BUTTONS)
-        if isinstance(current_buttons, str) and current_buttons:
-            current_buttons = [b.strip() for b in current_buttons.split("\n") if b.strip()]
-        elif not current_buttons:
-            current_buttons = []
-
-        return self.async_show_form(
-            step_id="blinds",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(
-                        CONF_ENABLE_BLINDS,
-                        default=current.get(CONF_ENABLE_BLINDS, DEFAULT_ENABLE_BLINDS),
-                    ): cv.boolean,
-                    vol.Optional(
-                        CONF_BLINDS_ENTITIES,
-                        default=current_blinds,
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain="cover",
-                            multiple=True,
-                        )
-                    ),
-                    vol.Optional(
-                        CONF_BLINDS_FAVORITE_BUTTONS,
-                        default=current_buttons,
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain="button",
-                            multiple=True,
-                        )
-                    ),
                 }
             ),
         )

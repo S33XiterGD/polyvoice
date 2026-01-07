@@ -115,7 +115,6 @@ CONF_ENABLE_THERMOSTAT: Final = "enable_thermostat"
 CONF_ENABLE_DEVICE_STATUS: Final = "enable_device_status"
 CONF_ENABLE_WIKIPEDIA: Final = "enable_wikipedia"
 CONF_ENABLE_MUSIC: Final = "enable_music"
-CONF_ENABLE_BLINDS: Final = "enable_blinds"
 
 DEFAULT_ENABLE_WEATHER: Final = True
 DEFAULT_ENABLE_CALENDAR: Final = True
@@ -129,7 +128,6 @@ DEFAULT_ENABLE_THERMOSTAT: Final = True
 DEFAULT_ENABLE_DEVICE_STATUS: Final = True
 DEFAULT_ENABLE_WIKIPEDIA: Final = True
 DEFAULT_ENABLE_MUSIC: Final = False  # Requires Music Assistant + player config
-DEFAULT_ENABLE_BLINDS: Final = False  # Requires blinds entity configuration
 
 # =============================================================================
 # ENTITY CONFIGURATION - User-defined entities
@@ -139,7 +137,6 @@ CONF_CALENDAR_ENTITIES: Final = "calendar_entities"
 CONF_ROOM_PLAYER_MAPPING: Final = "room_player_mapping"
 CONF_DEVICE_ALIASES: Final = "device_aliases"
 CONF_CAMERA_ENTITIES: Final = "camera_entities"
-CONF_BLINDS_ENTITIES: Final = "blinds_entities"
 CONF_BLINDS_FAVORITE_BUTTONS: Final = "blinds_favorite_buttons"
 
 # Thermostat settings - user-configurable temperature range and step
@@ -200,7 +197,6 @@ DEFAULT_CALENDAR_ENTITIES: Final = ""
 DEFAULT_ROOM_PLAYER_MAPPING: Final = ""  # room:entity_id, one per line
 DEFAULT_DEVICE_ALIASES: Final = ""
 DEFAULT_CAMERA_ENTITIES: Final = ""
-DEFAULT_BLINDS_ENTITIES: Final = ""
 DEFAULT_BLINDS_FAVORITE_BUTTONS: Final = ""
 
 # Thermostat defaults (Fahrenheit by default)
