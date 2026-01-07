@@ -88,11 +88,11 @@ DEVICE_SYNONYMS = {
     "fan": ["ceiling fan", "exhaust fan", "fans"],
     "fans": ["ceiling fans", "fan"],
     "ceiling fan": ["fan"],
-    # Door synonyms
-    "door": ["gate", "entry", "doors"],
-    "doors": ["gates", "door"],
-    "gate": ["door", "entry", "gates"],
-    "gates": ["doors", "gate"],
+    # Door synonyms - door and gate are NOT synonyms (different devices)
+    "door": ["doors"],
+    "doors": ["door"],
+    "gate": ["gates"],
+    "gates": ["gate"],
     "garage": ["garage door"],
     "garage door": ["garage"],
     # TV/Media synonyms
