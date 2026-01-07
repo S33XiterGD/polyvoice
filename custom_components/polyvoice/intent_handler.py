@@ -201,12 +201,15 @@ def register_intent_handlers(
 
     original_handlers: dict[str, IntentHandler] = {}
 
+    # Get the handlers dict from hass.data
+    handlers_dict = hass.data.get(intent_helpers.DATA_HANDLERS, {})
+
     for intent_type in excluded_intents:
         if intent_type not in INTERCEPTED_INTENTS:
             continue
 
-        # Save original handler
-        original = intent_helpers.async_get_handler(hass, intent_type)
+        # Save original handler from the handlers dict
+        original = handlers_dict.get(intent_type)
         if original:
             original_handlers[intent_type] = original
             _LOGGER.debug("Saved original handler for %s", intent_type)
