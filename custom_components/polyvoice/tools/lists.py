@@ -161,9 +161,13 @@ async def manage_list(
             }
 
         elif action == "show" or action == "get" or action == "read":
+            # Check if user wants completed items
+            show_completed = arguments.get("status", "").lower() in ("completed", "done", "checked")
+            status_filter = "completed" if show_completed else "needs_action"
+
             result = await hass.services.async_call(
                 "todo", "get_items",
-                {"entity_id": target_list, "status": "needs_action"},
+                {"entity_id": target_list, "status": status_filter},
                 blocking=True,
                 return_response=True
             )
@@ -173,21 +177,102 @@ async def manage_list(
                 items = result[target_list].get("items", [])
 
             list_friendly = hass.states.get(target_list).attributes.get("friendly_name", "list")
+            status_label = "completed" if show_completed else "active"
 
             if not items:
                 return {
                     "list": list_friendly,
                     "count": 0,
                     "items": [],
-                    "message": f"{list_friendly} is empty"
+                    "message": f"{list_friendly} has no {status_label} items"
                 }
 
-            item_names = [i.get("summary", "") for i in items]
+            # Sort items alphabetically for display
+            item_names = sorted([i.get("summary", "") for i in items], key=str.lower)
             return {
                 "list": list_friendly,
                 "count": len(items),
                 "items": item_names,
-                "message": f"{list_friendly} has {len(items)} item{'s' if len(items) != 1 else ''}: {', '.join(item_names)}"
+                "status": status_label,
+                "message": f"{list_friendly} has {len(items)} {status_label} item{'s' if len(items) != 1 else ''}: {', '.join(item_names)}"
+            }
+
+        elif action == "sort" or action == "alphabetize":
+            # Check if user wants to sort completed items
+            sort_completed = arguments.get("status", "").lower() in ("completed", "done", "checked")
+            status_filter = "completed" if sort_completed else "needs_action"
+            status_label = "completed" if sort_completed else "active"
+
+            result = await hass.services.async_call(
+                "todo", "get_items",
+                {"entity_id": target_list, "status": status_filter},
+                blocking=True,
+                return_response=True
+            )
+
+            items = []
+            if result and target_list in result:
+                items = result[target_list].get("items", [])
+
+            if len(items) < 2:
+                return {"message": f"List has fewer than 2 {status_label} items, nothing to sort"}
+
+            # Get item names and sort alphabetically
+            item_names = [i.get("summary", "") for i in items]
+            sorted_names = sorted(item_names, key=str.lower)
+
+            # Check if already sorted
+            if item_names == sorted_names:
+                return {"message": f"{status_label.capitalize()} items are already sorted alphabetically"}
+
+            # For completed items, we need to uncomplete, remove, re-add, then complete
+            if sort_completed:
+                # Remove all completed items
+                for name in item_names:
+                    await hass.services.async_call(
+                        "todo", "remove_item",
+                        {"entity_id": target_list, "item": name},
+                        blocking=True
+                    )
+
+                # Re-add in sorted order and mark as completed
+                for name in sorted_names:
+                    await hass.services.async_call(
+                        "todo", "add_item",
+                        {"entity_id": target_list, "item": name},
+                        blocking=True
+                    )
+                    await hass.services.async_call(
+                        "todo", "update_item",
+                        {"entity_id": target_list, "item": name, "status": "completed"},
+                        blocking=True
+                    )
+            else:
+                # Remove all active items
+                for name in item_names:
+                    await hass.services.async_call(
+                        "todo", "remove_item",
+                        {"entity_id": target_list, "item": name},
+                        blocking=True
+                    )
+
+                # Re-add in sorted order
+                for name in sorted_names:
+                    await hass.services.async_call(
+                        "todo", "add_item",
+                        {"entity_id": target_list, "item": name},
+                        blocking=True
+                    )
+
+            list_friendly = hass.states.get(target_list).attributes.get("friendly_name", "list")
+            return {
+                "success": True,
+                "action": "sorted",
+                "count": len(sorted_names),
+                "items": sorted_names,
+                "status": status_label,
+                "list": list_friendly,
+                "message": f"Sorted {len(sorted_names)} {status_label} items alphabetically on {list_friendly}"
             }
 
         elif action == "clear":
