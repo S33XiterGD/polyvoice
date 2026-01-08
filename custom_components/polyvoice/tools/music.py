@@ -195,14 +195,19 @@ class MusicController:
                     blocking=True
                 )
 
-        # Return verbatim confirmation for LLM to read back
+        # Natural response - include name and room
+        shuffled = shuffle or media_type == "genre"
+        if shuffled:
+            speech = f"Now shuffling {query} in the {room}"
+        else:
+            speech = f"Now playing {query} in the {room}"
+
         return {
-            "status": "playing",
-            "now_playing": query,
-            "media_type": media_type,
+            "status": "ok",
+            "name": query,
+            "type": media_type,
             "room": room,
-            "shuffled": shuffle or media_type == "genre",
-            "message": f"Now playing '{query}' ({media_type}) in the {room}"
+            "speech": speech
         }
 
     async def _handle_pause(self, ctx: dict) -> dict:
@@ -441,13 +446,13 @@ class MusicController:
                 blocking=True
             )
 
-            # Return verbatim confirmation for LLM to read back exactly
+            # Natural response - include playlist name and room
             return {
-                "status": "shuffling",
-                "now_playing": matched_name,
-                "media_type": media_type_to_use,
+                "status": "ok",
+                "name": matched_name,
+                "type": media_type_to_use,
                 "room": room,
-                "message": f"Now shuffling '{matched_name}' in the {room}"
+                "speech": f"Now shuffling {matched_name} in the {room}"
             }
 
         except Exception as search_err:
