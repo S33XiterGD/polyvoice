@@ -250,20 +250,24 @@ def build_tools(config: "ToolConfig") -> list[dict]:
     # ===== TIMERS (always enabled) =====
     tools.append(_tool(
         "control_timer",
-        "Control timers. Use for: 'set a timer for 10 minutes', 'cancel the timer', 'how much time is left', 'pause timer'.",
+        "Control timers. Understands natural language like 'half an hour', 'one minute', '2 and a half hours'. Use for: 'set a timer', 'cancel timer', 'how much time left', 'pause', 'add 5 minutes', 'restart the timer'.",
         {
             "action": {
                 "type": "string",
-                "enum": ["start", "cancel", "pause", "resume", "status"],
-                "description": "'start' to create timer, 'cancel' to stop, 'pause'/'resume' to control, 'status' to check"
+                "enum": ["start", "cancel", "pause", "resume", "status", "add", "restart", "finish"],
+                "description": "'start' to create, 'cancel' to stop, 'pause'/'resume' to control, 'status' to check, 'add' to extend, 'restart' same duration, 'finish' to complete early"
             },
             "duration": {
                 "type": "string",
-                "description": "Duration for new timer (e.g., '10 minutes', '1 hour 30 minutes', '90 seconds')"
+                "description": "Natural language duration: '10 minutes', 'half an hour', 'one hour', '90 seconds', '2 and a half hours', or just '15' for 15 minutes"
             },
             "name": {
                 "type": "string",
-                "description": "Optional timer name (e.g., 'pizza', 'laundry')"
+                "description": "Optional timer name for multi-timer support (e.g., 'pizza', 'laundry', 'eggs')"
+            },
+            "add_time": {
+                "type": "string",
+                "description": "Time to add when action='add' (e.g., '5 minutes', 'another 10')"
             }
         },
         ["action"]
