@@ -181,6 +181,7 @@ class MusicController:
             return {"error": f"Unknown room: {room}. Available: {', '.join(self._players.keys())}"}
 
         for player in target_players:
+            _LOGGER.info("Playing '%s' (%s) in %s - radio_mode=False", query, media_type, room)
             await self._hass.services.async_call(
                 "music_assistant", "play_media",
                 {"media_id": query, "media_type": media_type, "enqueue": "replace", "radio_mode": False},
@@ -194,7 +195,15 @@ class MusicController:
                     blocking=True
                 )
 
-        return {"status": "playing", "message": f"Playing {query} in the {room}"}
+        # Return verbatim confirmation for LLM to read back
+        return {
+            "status": "playing",
+            "now_playing": query,
+            "media_type": media_type,
+            "room": room,
+            "shuffled": shuffle or media_type == "genre",
+            "message": f"Now playing '{query}' ({media_type}) in the {room}"
+        }
 
     async def _handle_pause(self, ctx: dict) -> dict:
         """Pause music."""
@@ -432,12 +441,13 @@ class MusicController:
                 blocking=True
             )
 
+            # Return verbatim confirmation for LLM to read back exactly
             return {
                 "status": "shuffling",
-                "matched": matched_name,
-                "type": media_type_to_use,
+                "now_playing": matched_name,
+                "media_type": media_type_to_use,
                 "room": room,
-                "message": f"Shuffling {matched_name} in the {room}"
+                "message": f"Now shuffling '{matched_name}' in the {room}"
             }
 
         except Exception as search_err:
