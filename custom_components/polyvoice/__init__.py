@@ -38,7 +38,11 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 @callback
 def _handle_timer_finished(hass: HomeAssistant, event: Event) -> None:
-    """Handle timer.finished event and announce via TTS."""
+    """Handle timer.finished event and announce via TTS.
+
+    Note: This callback may be invoked from a sync worker thread,
+    so we use hass.add_job for thread-safe task scheduling.
+    """
     entity_id = event.data.get("entity_id")
     if not entity_id:
         return
@@ -64,8 +68,8 @@ def _handle_timer_finished(hass: HomeAssistant, event: Event) -> None:
     else:
         message = f"Your {timer_name} timer is done!"
 
-    # Try to announce via TTS
-    hass.async_create_task(_announce_timer_finished(hass, message, announce_player))
+    # Use thread-safe method to schedule the async task
+    hass.add_job(_announce_timer_finished(hass, message, announce_player))
 
 
 async def _announce_timer_finished(
